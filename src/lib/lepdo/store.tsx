@@ -26,7 +26,7 @@ import type {
   Transaction,
 } from "./types";
 
-const STORAGE_KEY = "lepdo.accounting.v1";
+const STORAGE_KEY = "lepdo.accounting.v2";
 const USER = "LEPDO Admin";
 
 export interface NewEntryInput {
