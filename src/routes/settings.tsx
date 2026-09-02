@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import lepdoLogo from "@/assets/lepdo-logo.png.asset.json";
 import { createFileRoute } from "@tanstack/react-router";
-import { Eye, Pencil, Plus, RotateCcw, Save, Trash2, Upload, X, Download, ShieldAlert } from "lucide-react";
+import { Eye, Mail, Pencil, Plus, RotateCcw, Save, Trash2, Upload, X, Download, ShieldAlert } from "lucide-react";
+import { emailBackup } from "@/lib/lepdo/emailBackup.functions";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1503,6 +1504,27 @@ function Security({
 
   const backup = () => runBackup(false);
 
+  const [emailing, setEmailing] = useState(false);
+  const emailBackupNow = async () => {
+    setEmailing(true);
+    try {
+      const entry = runBackup(true);
+      const filename = `lepdo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const json = JSON.stringify(entry.data, null, 2);
+      const bytes = new TextEncoder().encode(json);
+      let bin = "";
+      for (const b of bytes) bin += String.fromCharCode(b);
+      const contentBase64 = btoa(bin);
+      const res = await emailBackup({ data: { filename, contentBase64 } });
+      if (res.ok) toast.success("Backup emailed to lepdogroup@gmail.com");
+      else toast.error(res.error ?? "Could not send the backup email.");
+    } catch {
+      toast.error("Could not send the backup email.");
+    } finally {
+      setEmailing(false);
+    }
+  };
+
   // Automatic daily backup — runs once per app load if the newest backup is stale.
   useEffect(() => {
     const latest = backups[0];
@@ -1663,6 +1685,9 @@ function Security({
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={backup}>
             <Download className="size-3.5" /> Backup now
+          </Button>
+          <Button variant="outline" size="sm" onClick={emailBackupNow} disabled={emailing}>
+            <Mail className="size-3.5" /> {emailing ? "Sending…" : "Email backup"}
           </Button>
           <label className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-muted/60">
             <Upload className="size-3.5" /> Restore from file
