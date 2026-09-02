@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
   type Context,
@@ -14,7 +15,8 @@ import { categoryMap } from "./constants";
 import { DEFAULT_SETTINGS } from "./extras";
 import { mergeMasters } from "./masters";
 import { isLedgerEntry } from "./entry";
-import { loadWorkspace, saveWorkspace } from "@/lib/lepdo/workspace.functions";
+import { loadWorkspace, saveWorkspace, WORKSPACE_ID } from "@/lib/lepdo/workspace.functions";
+import { supabase } from "@/integrations/supabase/client";
 
 
 import type {
@@ -32,7 +34,7 @@ import type {
   Transaction,
 } from "./types";
 
-const STORAGE_KEY = "lepdo.accounting.v2";
+const STORAGE_KEY = "lepdo.accounting.v3";
 const USER = "LEPDO Admin";
 
 export interface NewEntryInput {
@@ -286,57 +288,123 @@ function nextCode(): string {
 export function LepdoProvider({ children }: { children: ReactNode; userId?: string }) {
   const [data, setData] = useState<LepdoData>(() => buildSeed());
   const [ready, setReady] = useState(false);
+  // Snapshot JSON we last pushed/received, so realtime echoes of our own write
+  // (and identical payloads) never trigger a pointless re-render or write-back.
+  const syncedJsonRef = useRef<string | null>(null);
+  // set when state came from the cloud: skips one save cycle so remote data is
+  // never immediately pushed back (which would fight other clients).
+  const fromRemoteRef = useRef(false);
+
+  const applyRemote = useCallback((parsed: Partial<LepdoData>, json: string) => {
+    if (syncedJsonRef.current === json) return;
+    syncedJsonRef.current = json;
+    const loaded = hydrate(parsed);
+    counter = Math.max(
+      counter,
+      2000,
+      ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
+    );
+    fromRemoteRef.current = true;
+    setData(loaded);
+    try {
+      window.localStorage.setItem(STORAGE_KEY, json);
+    } catch {
+      /* storage unavailable */
+    }
+  }, []);
 
   // Load: prefer the shared cloud copy; fall back to whatever this browser cached.
   useEffect(() => {
     let cancelled = false;
-    const apply = (loaded: LepdoData) => {
-      if (cancelled) return;
-      counter = Math.max(
-        2000,
-        ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
-      );
-      setData(loaded);
-      setReady(true);
-    };
 
     const local = load();
 
-    void (async () => {
+    const pull = async () => {
       try {
         const { json } = await loadWorkspace();
+        if (cancelled) return;
         const remote = json ? (JSON.parse(json) as Partial<LepdoData>) : null;
         const hasRemote = !!remote && Object.keys(remote).length > 0;
-        const next = hasRemote ? hydrate(remote) : local;
-        if (!hasRemote && !isEmptyData(local)) {
-          await saveWorkspace({ data: { json: JSON.stringify(local) } });
+        if (hasRemote && json) {
+          applyRemote(remote, json);
+        } else if (!isEmptyData(local)) {
+          const localJson = JSON.stringify(local);
+          syncedJsonRef.current = localJson;
+          await saveWorkspace({ data: { json: localJson } });
+          if (!cancelled) setData(local);
+        } else {
+          setData(local);
         }
-        apply(next);
       } catch {
-        apply(local);
+        if (!cancelled) setData(local);
+      } finally {
+        if (!cancelled) setReady(true);
       }
-    })();
+    };
+
+    void pull();
+
+    // Realtime: the database row is the single source of truth. Any insert or
+    // update from another tab/browser/device pushes the new snapshot here.
+    const channel = supabase
+      .channel("lepdo-workspace")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "workspace", filter: `id=eq.${WORKSPACE_ID}` },
+        (payload) => {
+          const row = (payload.new ?? null) as { data?: unknown } | null;
+          if (!row?.data) return;
+          try {
+            const json = JSON.stringify(row.data);
+            applyRemote(row.data as Partial<LepdoData>, json);
+          } catch {
+            void pull();
+          }
+        },
+      )
+      .subscribe((status) => {
+        // Reconnected after a drop: re-pull in case events were missed.
+        if (status === "SUBSCRIBED") void pull();
+      });
+
+    const onWake = () => {
+      if (document.visibilityState === "visible") void pull();
+    };
+    window.addEventListener("online", onWake);
+    document.addEventListener("visibilitychange", onWake);
 
     return () => {
       cancelled = true;
+      window.removeEventListener("online", onWake);
+      document.removeEventListener("visibilitychange", onWake);
+      void supabase.removeChannel(channel);
     };
-  }, []);
+  }, [applyRemote]);
 
   // Save: local cache immediately, shared cloud copy debounced.
   useEffect(() => {
     if (!ready) return;
+    const json = JSON.stringify(data);
     try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+      window.localStorage.setItem(STORAGE_KEY, json);
     } catch {
       /* storage unavailable */
     }
+    if (fromRemoteRef.current) {
+      fromRemoteRef.current = false;
+      return;
+    }
+    if (syncedJsonRef.current === json) return;
     const timer = window.setTimeout(() => {
-      void saveWorkspace({ data: { json: JSON.stringify(data) } }).catch(() => {
-        /* offline: local cache keeps the data */
+      syncedJsonRef.current = json;
+      void saveWorkspace({ data: { json } }).catch(() => {
+        // offline: local cache keeps the data, next reconnect re-pulls/pushes
+        syncedJsonRef.current = null;
       });
-    }, 800);
+    }, 500);
     return () => window.clearTimeout(timer);
   }, [data, ready]);
+
 
 
 

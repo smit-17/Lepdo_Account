@@ -1,18 +1,21 @@
 import { createServerFn } from "@tanstack/react-start";
 
-const WORKSPACE_ID = "lepdo-main";
+export const WORKSPACE_ID = "lepdo-main";
 
 /** Reads the shared LEPDO workspace snapshot as a JSON string. */
 export const loadWorkspace = createServerFn({ method: "GET" }).handler(async () => {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin
     .from("workspace")
-    .select("data")
+    .select("data, updated_at")
     .eq("id", WORKSPACE_ID)
     .maybeSingle();
   if (error) throw error;
   const row = data?.data ?? null;
-  return { json: row ? JSON.stringify(row) : null };
+  return {
+    json: row ? JSON.stringify(row) : null,
+    updatedAt: data?.updated_at ?? null,
+  };
 });
 
 /** Writes the shared LEPDO workspace snapshot from a JSON string. */
@@ -23,11 +26,12 @@ export const saveWorkspace = createServerFn({ method: "POST" })
   })
   .handler(async ({ data: payload }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const updatedAt = new Date().toISOString();
     const { error } = await supabaseAdmin.from("workspace").upsert({
       id: WORKSPACE_ID,
       data: JSON.parse(payload.json) as never,
-      updated_at: new Date().toISOString(),
+      updated_at: updatedAt,
     });
     if (error) throw error;
-    return { ok: true };
+    return { ok: true, updatedAt };
   });
