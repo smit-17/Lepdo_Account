@@ -15,6 +15,7 @@ import { categoryMap } from "./constants";
 import { DEFAULT_SETTINGS } from "./extras";
 import { mergeMasters } from "./masters";
 import { isLedgerEntry } from "./entry";
+import { mergeThreeWay } from "@/lib/lepdo/merge";
 import { loadWorkspace, saveWorkspace, WORKSPACE_ID } from "@/lib/lepdo/workspace.functions";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -291,27 +292,68 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
   // Snapshot JSON we last pushed/received, so realtime echoes of our own write
   // (and identical payloads) never trigger a pointless re-render or write-back.
   const syncedJsonRef = useRef<string | null>(null);
+  // Snapshot our local edits are based on (last state agreed with the cloud).
+  const baseJsonRef = useRef<string | null>(null);
   // set when state came from the cloud: skips one save cycle so remote data is
   // never immediately pushed back (which would fight other clients).
   const fromRemoteRef = useRef(false);
+  // `updated_at` of the snapshot this client is based on (optimistic concurrency).
+  const versionRef = useRef<string | null>(null);
 
-  const applyRemote = useCallback((parsed: Partial<LepdoData>, json: string) => {
-    if (syncedJsonRef.current === json) return;
-    syncedJsonRef.current = json;
-    const loaded = hydrate(parsed);
-    counter = Math.max(
-      counter,
-      2000,
-      ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
-    );
-    fromRemoteRef.current = true;
-    setData(loaded);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, json);
-    } catch {
-      /* storage unavailable */
-    }
-  }, []);
+  // Latest local state, readable from callbacks without re-subscribing.
+  const dataRef = useRef<LepdoData>(data);
+  dataRef.current = data;
+
+  const applyRemote = useCallback(
+    (parsed: Partial<LepdoData>, json: string, updatedAt: string | null) => {
+      versionRef.current = updatedAt;
+      if (syncedJsonRef.current === json) {
+        baseJsonRef.current = json;
+        return;
+      }
+
+      // Unsaved local edits (a write is still debounced/in flight): merge the
+      // remote snapshot into ours instead of discarding what the user just did.
+      const localJson = JSON.stringify(dataRef.current);
+      const hasLocalEdits =
+        syncedJsonRef.current !== null && localJson !== syncedJsonRef.current;
+
+      let nextParsed = parsed;
+      let nextJson = json;
+      if (hasLocalEdits) {
+        const base = baseJsonRef.current
+          ? (JSON.parse(baseJsonRef.current) as Partial<LepdoData>)
+          : parsed;
+        nextParsed = mergeThreeWay(
+          base,
+          parsed,
+          JSON.parse(localJson) as Partial<LepdoData>,
+        );
+        nextJson = JSON.stringify(nextParsed);
+      }
+      baseJsonRef.current = json;
+
+      const loaded = hydrate(nextParsed);
+      counter = Math.max(
+        counter,
+        2000,
+        ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
+      );
+      // A merged snapshot still has to be pushed; a pure remote one does not.
+      if (!hasLocalEdits) {
+        syncedJsonRef.current = nextJson;
+        fromRemoteRef.current = true;
+      }
+      setData(loaded);
+      try {
+        window.localStorage.setItem(STORAGE_KEY, nextJson);
+      } catch {
+        /* storage unavailable */
+      }
+    },
+    [],
+  );
+
 
   // Load: prefer the shared cloud copy; fall back to whatever this browser cached.
   useEffect(() => {
@@ -321,18 +363,24 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
 
     const pull = async () => {
       try {
-        const { json } = await loadWorkspace();
+        const { json, updatedAt } = await loadWorkspace();
         if (cancelled) return;
         const remote = json ? (JSON.parse(json) as Partial<LepdoData>) : null;
         const hasRemote = !!remote && Object.keys(remote).length > 0;
         if (hasRemote && json) {
-          applyRemote(remote, json);
+          applyRemote(remote, json, updatedAt);
         } else if (!isEmptyData(local)) {
           const localJson = JSON.stringify(local);
           syncedJsonRef.current = localJson;
-          await saveWorkspace({ data: { json: localJson } });
+          versionRef.current = updatedAt;
+          const res = await saveWorkspace({
+            data: { json: localJson, version: updatedAt },
+          });
+          if (res.ok) versionRef.current = res.updatedAt;
+          else syncedJsonRef.current = null;
           if (!cancelled) setData(local);
         } else {
+          versionRef.current = updatedAt;
           setData(local);
         }
       } catch {
@@ -352,11 +400,11 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
         "postgres_changes",
         { event: "*", schema: "public", table: "workspace", filter: `id=eq.${WORKSPACE_ID}` },
         (payload) => {
-          const row = (payload.new ?? null) as { data?: unknown } | null;
+          const row = (payload.new ?? null) as { data?: unknown; updated_at?: string } | null;
           if (!row?.data) return;
           try {
             const json = JSON.stringify(row.data);
-            applyRemote(row.data as Partial<LepdoData>, json);
+            applyRemote(row.data as Partial<LepdoData>, json, row.updated_at ?? null);
           } catch {
             void pull();
           }
@@ -381,7 +429,9 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     };
   }, [applyRemote]);
 
-  // Save: local cache immediately, shared cloud copy debounced.
+  // Save: local cache immediately, shared cloud copy debounced with a version
+  // check. A rejected (stale) write is merged with the newest remote snapshot
+  // and retried, so concurrent edits from two browsers are never lost.
   useEffect(() => {
     if (!ready) return;
     const json = JSON.stringify(data);
@@ -395,15 +445,48 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       return;
     }
     if (syncedJsonRef.current === json) return;
+
+    const push = async (payloadJson: string, attempt: number): Promise<void> => {
+      syncedJsonRef.current = payloadJson;
+      const res = await saveWorkspace({
+        data: { json: payloadJson, version: versionRef.current },
+      });
+      if (res.ok) {
+        versionRef.current = res.updatedAt;
+        baseJsonRef.current = payloadJson;
+        return;
+      }
+      // Someone else wrote first: three-way merge their snapshot with ours
+      // (only fields we actually changed win) and retry.
+      versionRef.current = res.updatedAt;
+      if (attempt >= 3) {
+        syncedJsonRef.current = null;
+        return;
+      }
+      const remote = res.json ? (JSON.parse(res.json) as Partial<LepdoData>) : {};
+      const base = baseJsonRef.current
+        ? (JSON.parse(baseJsonRef.current) as Partial<LepdoData>)
+        : remote;
+      const merged = mergeThreeWay(
+        base,
+        remote,
+        JSON.parse(payloadJson) as Partial<LepdoData>,
+      );
+      const mergedJson = JSON.stringify(merged);
+      applyRemote(merged, mergedJson, versionRef.current);
+      await push(mergedJson, attempt + 1);
+    };
+
     const timer = window.setTimeout(() => {
-      syncedJsonRef.current = json;
-      void saveWorkspace({ data: { json } }).catch(() => {
+      void push(json, 0).catch(() => {
         // offline: local cache keeps the data, next reconnect re-pulls/pushes
         syncedJsonRef.current = null;
       });
     }, 500);
+
     return () => window.clearTimeout(timer);
-  }, [data, ready]);
+  }, [data, ready, applyRemote]);
+
 
 
 

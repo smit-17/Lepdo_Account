@@ -118,6 +118,15 @@ function Settings() {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [preview, setPreview] = useState(false);
 
+  // Keep the form in step with the shared cloud copy (first load and any live
+  // update from another browser) unless the user has unsaved changes here.
+  useEffect(() => {
+    if (!dirty) setDraft(store.settings);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [store.settings, dirty]);
+
+
+
   const patch = <K extends keyof AppSettings>(key: K, value: Partial<AppSettings[K]>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...value } }));
     setDirty(true);
