@@ -424,7 +424,8 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     const push = async (payloadJson: string, attempt: number): Promise<void> => {
       syncedJsonRef.current = payloadJson;
       const res = await saveWorkspace({
-        data: { json: payloadJson, version: versionRef.current },
+        json: payloadJson,
+        version: versionRef.current,
       });
       if (res.ok) {
         versionRef.current = res.updatedAt;
