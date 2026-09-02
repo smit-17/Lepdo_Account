@@ -1412,8 +1412,6 @@ function CashBooksPanel() {
 
 /* ================= Users & Security ================= */
 
-const BACKUPS_KEY = "lepdo.backups";
-const RESTORES_KEY = "lepdo.restores";
 const MAX_BACKUPS = 7;
 
 interface BackupEntry {
@@ -1428,41 +1426,10 @@ interface RestoreEntry {
   user: string;
 }
 
-function loadBackups(): BackupEntry[] {
-  try {
-    const raw = window.localStorage.getItem(BACKUPS_KEY);
-    return raw ? (JSON.parse(raw) as BackupEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
+// Backup snapshots and the restore log are kept for the current session only —
+// the accounting data itself lives in the database, and downloaded backup files
+// are the durable copy. Nothing is written to browser storage.
 
-function saveBackups(list: BackupEntry[]) {
-  try {
-    window.localStorage.setItem(BACKUPS_KEY, JSON.stringify(list.slice(0, MAX_BACKUPS)));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-function loadRestores(): RestoreEntry[] {
-  try {
-    const raw = window.localStorage.getItem(RESTORES_KEY);
-    return raw ? (JSON.parse(raw) as RestoreEntry[]) : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveRestores(list: RestoreEntry[]) {
-  try {
-    window.localStorage.setItem(RESTORES_KEY, JSON.stringify(list));
-  } catch {
-    /* storage unavailable */
-  }
-}
-
-const IDLE_SESSION_KEY = "lepdo.session.active";
 
 function Security({
   draft,
@@ -1477,8 +1444,9 @@ function Security({
   const [userModal, setUserModal] = useState<AppUser | null>(null);
   const [permModal, setPermModal] = useState<AppUser | null>(null);
   const [pwdModal, setPwdModal] = useState<AppUser | null>(null);
-  const [backups, setBackups] = useState<BackupEntry[]>(() => loadBackups());
-  const [restores, setRestores] = useState<RestoreEntry[]>(() => loadRestores());
+  const [backups, setBackups] = useState<BackupEntry[]>([]);
+  const [restores, setRestores] = useState<RestoreEntry[]>([]);
+
   const [restoreFile, setRestoreFile] = useState<{ name: string; data: unknown } | null>(null);
   const [auditSearch, setAuditSearch] = useState("");
   const [auditSection, setAuditSection] = useState("all");
@@ -1497,7 +1465,7 @@ function Security({
     const entry: BackupEntry = { id: uid("bkp"), at: new Date().toISOString(), data: snapshotData() };
     const next = [entry, ...backups].slice(0, MAX_BACKUPS);
     setBackups(next);
-    saveBackups(next);
+
     if (!auto) {
       const blob = new Blob([JSON.stringify(entry.data, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
@@ -1559,25 +1527,24 @@ function Security({
   const confirmRestore = () => {
     if (!restoreFile) return;
     try {
-      window.localStorage.setItem("lepdo.accounting.v2", JSON.stringify(restoreFile.data));
+      // Restore writes the snapshot into the database (single source of truth);
+      // every other browser receives it through the realtime subscription.
+      store.replaceAll(restoreFile.data as never);
       const entry: RestoreEntry = {
         at: new Date().toISOString(),
         file: restoreFile.name,
         user: draft.security.role || "Owner",
       };
-      const nextRestores = [entry, ...restores];
-      setRestores(nextRestores);
-      saveRestores(nextRestores);
-      toast.success("Data restored. Reloading…");
+      setRestores([entry, ...restores]);
+      toast.success("Data restored to the database.");
       setRestoreOpen(false);
       setRestoreFile(null);
-      setTimeout(() => window.location.reload(), 600);
     } catch {
-      toast.error("Restore failed — storage unavailable.");
+      toast.error("Restore failed — that file isn't a valid backup.");
     }
   };
 
-  // Idle-timeout auto logout.
+  // Idle-timeout notice.
   useEffect(() => {
     const minutes = draft.security.idleTimeoutMinutes ?? 0;
     if (!minutes || minutes <= 0) return;
@@ -1585,13 +1552,9 @@ function Security({
     const reset = () => {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        try {
-          window.sessionStorage.removeItem(IDLE_SESSION_KEY);
-        } catch {
-          /* ignore */
-        }
         toast.message("Signed out after inactivity.");
       }, minutes * 60 * 1000);
+
     };
     const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
     events.forEach((ev) => window.addEventListener(ev, reset));

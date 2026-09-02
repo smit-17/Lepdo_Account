@@ -35,7 +35,7 @@ import type {
   Transaction,
 } from "./types";
 
-const STORAGE_KEY = "lepdo.accounting.v3";
+// No browser storage: the database row is the single source of truth.
 const USER = "LEPDO Admin";
 
 export interface NewEntryInput {
@@ -174,6 +174,13 @@ export interface AuditFields {
 
 interface StoreValue extends LepdoData {
   ready: boolean;
+  /** null while healthy; a message when the database could not be reached */
+  syncError: string | null;
+  /** re-fetch the latest database snapshot */
+  refresh: () => Promise<void>;
+  /** replace the whole workspace in the database (backup restore) */
+  replaceAll: (snapshot: Partial<LepdoData>) => void;
+
   addEntry: (input: NewEntryInput) => { ok: boolean; message: string };
   updateEntry: (
     id: string,
@@ -259,26 +266,10 @@ function hydrate(parsed: Partial<LepdoData> | null | undefined): LepdoData {
   };
 }
 
-function load(): LepdoData {
-  if (typeof window === "undefined") return buildSeed();
-  try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return buildSeed();
-    return hydrate(JSON.parse(raw) as Partial<LepdoData>);
-  } catch {
-    return buildSeed();
-  }
-}
+// The database is the single source of truth: there is no browser-local copy of
+// application data. An empty workspace simply renders empty states until the
+// first record is saved to the database.
 
-/** true when the snapshot still looks like an untouched empty workspace */
-function isEmptyData(d: LepdoData): boolean {
-  return (
-    d.transactions.length === 0 &&
-    d.salesInvoices.length === 0 &&
-    d.purchaseBills.length === 0 &&
-    d.parties.length === 0
-  );
-}
 
 let counter = 2000;
 function nextCode(): string {
@@ -289,6 +280,8 @@ function nextCode(): string {
 export function LepdoProvider({ children }: { children: ReactNode; userId?: string }) {
   const [data, setData] = useState<LepdoData>(() => buildSeed());
   const [ready, setReady] = useState(false);
+  const [syncError, setSyncError] = useState<string | null>(null);
+
   // Snapshot JSON we last pushed/received, so realtime echoes of our own write
   // (and identical payloads) never trigger a pointless re-render or write-back.
   const syncedJsonRef = useRef<string | null>(null);
@@ -345,50 +338,36 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
         fromRemoteRef.current = true;
       }
       setData(loaded);
-      try {
-        window.localStorage.setItem(STORAGE_KEY, nextJson);
-      } catch {
-        /* storage unavailable */
-      }
     },
     [],
   );
 
+  const pullRef = useRef<() => Promise<void>>(async () => {});
 
-  // Load: prefer the shared cloud copy; fall back to whatever this browser cached.
+  const refresh = useCallback(() => pullRef.current(), []);
+
+  // Load: the database row is the only source of application data.
   useEffect(() => {
     let cancelled = false;
-
-    const local = load();
 
     const pull = async () => {
       try {
         const { json, updatedAt } = await loadWorkspace();
         if (cancelled) return;
         const remote = json ? (JSON.parse(json) as Partial<LepdoData>) : null;
-        const hasRemote = !!remote && Object.keys(remote).length > 0;
-        if (hasRemote && json) {
+        if (remote && json && Object.keys(remote).length > 0) {
           applyRemote(remote, json, updatedAt);
-        } else if (!isEmptyData(local)) {
-          const localJson = JSON.stringify(local);
-          syncedJsonRef.current = localJson;
-          versionRef.current = updatedAt;
-          const res = await saveWorkspace({
-            data: { json: localJson, version: updatedAt },
-          });
-          if (res.ok) versionRef.current = res.updatedAt;
-          else syncedJsonRef.current = null;
-          if (!cancelled) setData(local);
         } else {
           versionRef.current = updatedAt;
-          setData(local);
         }
+        setSyncError(null);
       } catch {
-        if (!cancelled) setData(local);
+        if (!cancelled) setSyncError("Could not reach the database. Retrying…");
       } finally {
         if (!cancelled) setReady(true);
       }
     };
+    pullRef.current = pull;
 
     void pull();
 
@@ -429,17 +408,13 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     };
   }, [applyRemote]);
 
-  // Save: local cache immediately, shared cloud copy debounced with a version
-  // check. A rejected (stale) write is merged with the newest remote snapshot
-  // and retried, so concurrent edits from two browsers are never lost.
+
+  // Save: every change is written straight to the database (debounced) with a
+  // version check. A rejected (stale) write is merged with the newest remote
+  // snapshot and retried, so concurrent edits from two browsers are never lost.
   useEffect(() => {
     if (!ready) return;
     const json = JSON.stringify(data);
-    try {
-      window.localStorage.setItem(STORAGE_KEY, json);
-    } catch {
-      /* storage unavailable */
-    }
     if (fromRemoteRef.current) {
       fromRemoteRef.current = false;
       return;
@@ -454,6 +429,7 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       if (res.ok) {
         versionRef.current = res.updatedAt;
         baseJsonRef.current = payloadJson;
+        setSyncError(null);
         return;
       }
       // Someone else wrote first: three-way merge their snapshot with ours
@@ -479,13 +455,16 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
 
     const timer = window.setTimeout(() => {
       void push(json, 0).catch(() => {
-        // offline: local cache keeps the data, next reconnect re-pulls/pushes
+        // write failed (offline / server error): allow a retry on next change
+        // or reconnect, and tell the user their change is not saved yet.
         syncedJsonRef.current = null;
+        setSyncError("Changes could not be saved to the database. Retrying…");
       });
     }, 500);
 
     return () => window.clearTimeout(timer);
   }, [data, ready, applyRemote]);
+
 
 
 
@@ -1499,10 +1478,19 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     setData(buildSeed());
   }, []);
 
+  /** Restore a backup snapshot: written to the database by the save effect. */
+  const replaceAll = useCallback((snapshot: Partial<LepdoData>) => {
+    setData(hydrate(snapshot));
+  }, []);
+
   const value = useMemo<StoreValue>(
     () => ({
       ...data,
       ready,
+      syncError,
+      refresh,
+      replaceAll,
+
       addEntry,
       updateEntry,
       voidEntry,
@@ -1541,6 +1529,10 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     [
       data,
       ready,
+      syncError,
+      refresh,
+      replaceAll,
+
       addEntry,
       updateEntry,
       voidEntry,
@@ -1578,7 +1570,28 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
     ],
   );
 
-  return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
+  return (
+    <StoreContext.Provider value={value}>
+      {!ready ? (
+        <div className="flex min-h-screen items-center justify-center px-4">
+          <p className="text-sm text-muted-foreground">Loading your data…</p>
+        </div>
+      ) : (
+        <>
+          {syncError ? (
+            <div className="sticky top-0 z-50 bg-destructive px-4 py-2 text-center text-xs font-medium text-destructive-foreground">
+              {syncError}{" "}
+              <button className="underline" onClick={() => void refresh()}>
+                Retry now
+              </button>
+            </div>
+          ) : null}
+          {children}
+        </>
+      )}
+    </StoreContext.Provider>
+  );
+
 }
 
 export function useLepdo(): StoreValue {
