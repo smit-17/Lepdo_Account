@@ -11,7 +11,13 @@ export interface CategoryMeta {
 }
 
 export const CATEGORIES: CategoryMeta[] = [
-  { id: "sale_payment", label: "Sale Payment", tone: "sale", allows: ["in"], needsAllocation: "sales" },
+  {
+    id: "sale_payment",
+    label: "Sale Payment",
+    tone: "sale",
+    allows: ["in"],
+    needsAllocation: "sales",
+  },
   {
     id: "purchase_payment",
     label: "Purchase Payment",
@@ -128,4 +134,13 @@ export function categoryTone(id: CategoryId | null): string {
   return toneClass[tone ?? "other"] ?? "bg-cat-other-bg text-cat-other";
 }
 
-export const PAYMENT_METHODS = ["NEFT", "RTGS", "IMPS", "UPI", "Cheque", "Card", "Cash Deposit", "Other"];
+export const PAYMENT_METHODS = [
+  "NEFT",
+  "RTGS",
+  "IMPS",
+  "UPI",
+  "Cheque",
+  "Card",
+  "Cash Deposit",
+  "Other",
+];

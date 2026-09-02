@@ -1,5 +1,7 @@
 import { DEFAULT_SETTINGS } from "./extras";
+import { buildDefaultMasters } from "./masters";
 import type { LepdoData } from "./types";
+
 
 export function buildSeed(): LepdoData {
   return {
@@ -54,6 +56,10 @@ export function buildSeed(): LepdoData {
     teamMembers: [],
     teamPayments: [],
     goals: [],
+    emiPlans: [],
+    emiPayments: [],
+    masters: buildDefaultMasters(),
+
     settings: DEFAULT_SETTINGS,
   };
 }

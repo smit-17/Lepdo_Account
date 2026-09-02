@@ -118,6 +118,7 @@ function SalesPage() {
 
   const [openCustomerId, setOpenCustomerId] = useState<string | null>(null);
   const [group, setGroup] = useState<{ title: string; rows: InvoiceView[] } | null>(null);
+  const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
   /* ---- Invoice-Wise sort & filter state ---- */
   const today = todayISO();
@@ -135,6 +136,10 @@ function SalesPage() {
     saleType: "all",
     status: "all",
   });
+
+  useEffect(() => {
+    setUpdatedAt(new Date().toISOString());
+  }, []);
 
   useEffect(() => {
     shell.setPageAction({
@@ -298,6 +303,8 @@ function SalesPage() {
     });
   }, [model.invoices, iFrom, iTo, invFilters, invMin, invMax, invSearch, invSort]);
 
+
+
   function clearInvFilters() {
     setInvFilters({
       customer: "all",
@@ -317,6 +324,28 @@ function SalesPage() {
       ...PRESETS.map((p) => ({ value: p.id, label: p.label })),
     ],
     [shell.preset],
+  );
+
+  const SALE_TYPE_META: { id: string; label: string }[] = [
+    { id: "ue", label: "UE" },
+    { id: "ui", label: "UI" },
+    { id: "gst_inr", label: "GST INR" },
+    { id: "export", label: "Export" },
+  ];
+  const saleTypeCards = useMemo(
+    () =>
+      SALE_TYPE_META.map((t) => {
+        const list = filteredInvoices.filter((v) => v.invoice.saleType === t.id);
+        return {
+          ...t,
+          count: list.length,
+          total: round2(list.reduce((s, v) => s + v.invoice.total, 0)),
+          received: round2(list.reduce((s, v) => s + v.received, 0)),
+          pending: round2(list.reduce((s, v) => s + v.pending, 0)),
+        };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filteredInvoices],
   );
 
   const label = periodLabel(shell.preset);
@@ -347,20 +376,21 @@ function SalesPage() {
       <div className="min-w-0">
         <h1 className="truncate text-lg font-semibold text-navy lg:text-xl">Sales</h1>
         <p className="truncate text-xs text-muted-foreground">
-          {label} · Updated {formatDateTime(new Date().toISOString())}
+          {label} · Updated {updatedAt ? formatDateTime(updatedAt) : "—"}
         </p>
       </div>
 
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-card p-2">
-        <div className="relative min-w-0 flex-1 basis-full sm:basis-64">
+      <div className="space-y-2 rounded-xl border border-border bg-card p-2">
+        <div className="relative min-w-0">
           <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
-            className="h-9 pl-9"
+            className="h-9 w-full pl-9"
             placeholder="Search date, invoice, customer, seller, platform, amount, status, UTR"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
           />
         </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
         <Button
           className="h-9"
           onClick={() => {
@@ -382,7 +412,7 @@ function SalesPage() {
         </Button>
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="h-9">
+            <Button variant="outline" className="col-span-2 h-9 sm:col-span-1">
               <Download className="size-4" /> Download Report
             </Button>
           </DropdownMenuTrigger>
@@ -406,6 +436,7 @@ function SalesPage() {
             <DropdownMenuItem onSelect={() => report("outstanding", "pdf")}>PDF</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+        </div>
       </div>
 
       <div className="-mx-1 flex gap-1 overflow-x-auto rounded-xl border border-border bg-card p-1 sm:mx-0">
@@ -468,6 +499,26 @@ function SalesPage() {
             <Stat label="Overdue Invoices" value={String(totals.overdue)} tone="pending" />
           </div>
 
+          <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            {saleTypeCards.map((t) => (
+              <div key={t.id} className="min-w-0 rounded-xl border border-border bg-card p-3 shadow-sm">
+                <p className="truncate text-xs font-medium text-muted-foreground">{t.label}</p>
+                <p className="num mt-1 text-sm text-muted-foreground">
+                  {t.count} invoice{t.count === 1 ? "" : "s"}
+                </p>
+                <p className="num mt-1 text-base font-semibold text-navy">{formatMoney(t.total)}</p>
+                <div className="num mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                  <span>
+                    Recd <b className="text-sl-paid">{formatMoney(t.received)}</b>
+                  </span>
+                  <span>
+                    Due <b className="text-sl-pending">{formatMoney(t.pending)}</b>
+                  </span>
+                </div>
+              </div>
+            ))}
+          </div>
+
           <Panel
             title="Recent Invoices"
             action={
@@ -502,6 +553,24 @@ function SalesPage() {
 
       {tab === "invoices" ? (
         <div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-medium text-muted-foreground">Sale Type</span>
+            <Select
+              value={invFilters["saleType"] ?? "all"}
+              onValueChange={(v) => setInvFilters((f) => ({ ...f, saleType: v }))}
+            >
+              <SelectTrigger className="h-9 w-[180px] text-sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(invFilterDefs.find((f) => f.id === "saleType")?.options ?? []).map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <FilterBar
             datePreset={invPreset}
             dateOptions={invDateOptions}
@@ -527,7 +596,7 @@ function SalesPage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" variant="outline" className="h-9">
-                    <Download className="mr-1 h-4 w-4" /> Filtered
+                    <Download className="mr-1 h-4 w-4" /> Download Filtered Report
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -552,7 +621,30 @@ function SalesPage() {
             }
           />
           <Panel title={`Invoices (${invoiceRows.length})`}>
-            <InvoiceTable rows={invoiceRows} onOpen={setOpenInvoiceId} showMeta />
+            <InvoiceTable
+              rows={invoiceRows}
+              onOpen={setOpenInvoiceId}
+              showMeta
+              onEdit={(id) => {
+                setEditId(id);
+                setFormOpen(true);
+              }}
+              onAddPayment={(partyId) => {
+                setPaymentCustomer(partyId);
+                setPaymentOpen(true);
+              }}
+              onPreviewPdf={(id) => setPdfInvoiceId(id)}
+              onVoid={(v) => {
+                if (
+                  !window.confirm(
+                    `Void invoice ${v.invoice.number}? It stays in the audit log but stops affecting balances.`,
+                  )
+                )
+                  return;
+                store.voidSalesInvoice(v.invoice.id);
+                toast.success("Invoice voided.");
+              }}
+            />
           </Panel>
         </div>
       ) : null}
@@ -641,7 +733,6 @@ function SalesPage() {
         }}
       />
 
-
       <CustomerDialog
         customer={openCustomer}
         payments={model.payments}
@@ -658,14 +749,30 @@ function SalesPage() {
 
 /* --------------------------------- tables -------------------------------- */
 
+const SALE_TYPE_LABEL: Record<string, string> = {
+  ue: "UE",
+  ui: "UI",
+  gst_inr: "GST INR",
+  export: "Export",
+  domestic: "Domestic",
+};
+
 function InvoiceTable({
   rows,
   onOpen,
   showMeta,
+  onEdit,
+  onAddPayment,
+  onPreviewPdf,
+  onVoid,
 }: {
   rows: InvoiceView[];
   onOpen: (id: string) => void;
   showMeta?: boolean;
+  onEdit?: (id: string) => void;
+  onAddPayment?: (partyId: string) => void;
+  onPreviewPdf?: (id: string) => void;
+  onVoid?: (view: InvoiceView) => void;
 }) {
   if (!rows.length)
     return (
@@ -717,32 +824,63 @@ function InvoiceTable({
       </div>
       <div className="space-y-2 lg:hidden">
         {rows.map((v) => (
-          <button
-            key={v.invoice.id}
-            type="button"
-            onClick={() => onOpen(v.invoice.id)}
-            className="w-full rounded-lg border border-border bg-card p-3 text-left"
-          >
-            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-2">
-              <div className="min-w-0">
-                <p className="truncate text-sm font-semibold text-navy">{v.invoice.number}</p>
-                <p className="truncate text-xs text-muted-foreground">
-                  {v.customer?.name ?? "—"} · {formatDate(v.invoice.date)}
-                </p>
-                {showMeta ? (
-                  <p className="truncate text-[11px] text-muted-foreground">
-                    {v.invoice.sellerName || "No seller"} · {v.invoice.platform || "No platform"}
-                  </p>
-                ) : null}
+          <div key={v.invoice.id} className="space-y-2 rounded-lg border border-border bg-card p-3">
+            <button type="button" onClick={() => onOpen(v.invoice.id)} className="w-full text-left">
+              <p className="text-sm font-semibold text-navy">
+                <span className="break-words">{v.invoice.number}</span>
+                <span className="text-muted-foreground"> · </span>
+                <span className="break-words">{v.customer?.name ?? "—"}</span>
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {formatDate(v.invoice.date)} ·{" "}
+                {SALE_TYPE_LABEL[v.invoice.saleType ?? "domestic"] ?? "Domestic"}
+                {v.invoice.sellerName ? ` · ${v.invoice.sellerName}` : ""}
+                {v.invoice.platform ? ` · ${v.invoice.platform}` : ""}
+              </p>
+              <div className="mt-1.5 flex flex-wrap items-center justify-between gap-2">
+                <div className="num flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                  <span>
+                    Total <b className="font-semibold text-navy">{formatMoney(v.invoice.total)}</b>
+                  </span>
+                  <span>
+                    Recd <b className="font-semibold text-sl-paid">{formatMoney(v.received)}</b>
+                  </span>
+                  <span>
+                    Due <b className="font-semibold text-sl-pending">{formatMoney(v.pending)}</b>
+                  </span>
+                </div>
+                <StatusChip status={v.status} />
               </div>
-              <StatusChip status={v.status} />
-            </div>
-            <div className="num mt-2 grid grid-cols-3 gap-2 text-xs">
-              <span>Total {formatMoney(v.invoice.total)}</span>
-              <span className="text-sl-paid">Recd {formatMoney(v.received)}</span>
-              <span className="text-sl-pending">Due {formatMoney(v.pending)}</span>
-            </div>
-          </button>
+            </button>
+            {showMeta ? (
+              <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
+                <Button size="sm" variant="ghost" onClick={() => onOpen(v.invoice.id)}>
+                  View
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onEdit?.(v.invoice.id)}>
+                  Edit
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => onAddPayment?.(v.invoice.partyId)}
+                >
+                  Payment
+                </Button>
+                <Button size="sm" variant="ghost" onClick={() => onPreviewPdf?.(v.invoice.id)}>
+                  PDF
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-neg hover:bg-neg/10 hover:text-neg"
+                  onClick={() => onVoid?.(v)}
+                >
+                  Void
+                </Button>
+              </div>
+            ) : null}
+          </div>
         ))}
       </div>
     </>
@@ -1077,6 +1215,7 @@ function InvoiceDialog({
                         <th className="px-3 py-2 font-medium">Date</th>
                         <th className="w-[30%] px-3 py-2 font-medium">Account</th>
                         <th className="px-3 py-2 font-medium">Reference</th>
+                        <th className="w-[30%] px-3 py-2 font-medium">Source &amp; Status</th>
                         <th className="px-3 py-2 text-right font-medium">Amount</th>
                       </tr>
                     </thead>
@@ -1088,6 +1227,7 @@ function InvoiceDialog({
                           </td>
                           <td className="truncate px-3 py-2">{p.payment.account}</td>
                           <td className="truncate px-3 py-2">{p.payment.reference}</td>
+                          <td className="px-3 py-2"></td>
                           <td className="num px-3 py-2 text-right text-sl-paid">
                             {formatMoney(p.amount)}
                           </td>
@@ -1095,7 +1235,7 @@ function InvoiceDialog({
                       ))}
                       {!view.payments.length ? (
                         <tr>
-                          <td colSpan={4} className="px-3 py-3 text-center text-muted-foreground">
+                          <td colSpan={5} className="px-3 py-3 text-center text-muted-foreground">
                             No payments allocated yet.
                           </td>
                         </tr>

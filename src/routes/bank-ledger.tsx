@@ -1,13 +1,9 @@
+import { isLedgerEntry } from "@/lib/lepdo/entry";
+import { EntryHistory, EntryRowMenu } from "@/components/lepdo/entry-bits";
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
-import {
-  Download,
-  Landmark,
-  MoreVertical,
-  Plus,
-  Wallet,
-} from "lucide-react";
+import { Download, Landmark, MoreVertical, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -46,19 +42,26 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { formatDate, formatDateTime, formatMoney, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo, partyName, type NewEntryInput } from "@/lib/lepdo/store";
-import { isUchhina, uchhinaDirection, uchhinaTypeLabel } from "@/lib/lepdo/uchhina";
 import type { CategoryId, Transaction } from "@/lib/lepdo/types";
 import {
   BANKS,
   BANK_CATEGORIES,
+  BANK_ENTRY_OPTIONS,
   BANK_PRESETS,
   BANK_SEED,
+  bankFixedDirection,
   bankRange,
   periodLabel,
+  resolveTransferCategory,
+  resolveUchhinaCategory,
+  uiCategoryFromCategoryId,
   type BankPreset,
+  type BankUiCategory,
 } from "@/lib/lepdo/bank";
 import { categoryLabel, categoryTone } from "@/lib/lepdo/constants";
+import { Combo } from "@/components/lepdo/sales/ui";
 import { downloadCsv, downloadExcel, downloadPdf, type ReportRow } from "@/lib/lepdo/report";
 
 export const Route = createFileRoute("/bank-ledger")({
@@ -87,9 +90,10 @@ interface FormState {
   date: string;
   accountId: string;
   direction: "in" | "out";
-  category: CategoryId | "";
+  category: BankUiCategory | "";
+  destinationKind: "bank" | "cash" | "";
   destinationId: string;
-  person: string;
+  partyName: string;
   particulars: string;
   amount: string;
   reference: string;
@@ -101,8 +105,9 @@ const emptyForm = (): FormState => ({
   accountId: BANKS[0]!.id,
   direction: "in",
   category: "",
+  destinationKind: "",
   destinationId: "",
-  person: "",
+  partyName: "",
   particulars: "",
   amount: "",
   reference: "",
@@ -137,7 +142,7 @@ function BankLedgerPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [viewing, setViewing] = useState<Transaction | null>(null);
-  const [voiding, setVoiding] = useState<Transaction | null>(null);
+  const [deleting, setDeleting] = useState<Transaction | null>(null);
 
   const [from, to] = useMemo(
     () => bankRange(preset, today, customFrom, customTo),
@@ -160,7 +165,10 @@ function BankLedgerPage() {
     for (const bank of store.bankAccounts) {
       let bal = bank.openingBalance;
       const rows = store.transactions
-        .filter((t) => t.accountId === bank.id && t.sourceType === "bank" && !t.voided)
+        .filter(
+          (t) =>
+            t.accountId === bank.id && t.sourceType === "bank" && !t.voided && isLedgerEntry(t),
+        )
         .sort((a, b) =>
           a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
         );
@@ -178,6 +186,7 @@ function BankLedgerPage() {
         .filter(
           (t) =>
             t.sourceType === "bank" &&
+            isLedgerEntry(t) &&
             !t.voided &&
             t.date >= from &&
             t.date <= to &&
@@ -189,27 +198,41 @@ function BankLedgerPage() {
     [store.transactions, from, to, bankFilter],
   );
 
+  const postedRows = rows;
+
+  const openEdit = (t: Transaction) => {
+    setEditing(t);
+    setFormOpen(true);
+  };
+
   const totals = useMemo(() => {
-    const credit = rows.filter((t) => t.direction === "in").reduce((s, t) => s + t.amount, 0);
-    const debit = rows.filter((t) => t.direction === "out").reduce((s, t) => s + t.amount, 0);
+    const credit = postedRows.filter((t) => t.direction === "in").reduce((s, t) => s + t.amount, 0);
+    const debit = postedRows.filter((t) => t.direction === "out").reduce((s, t) => s + t.amount, 0);
     const scope =
       bankFilter === "all"
         ? store.bankAccounts
         : store.bankAccounts.filter((b) => b.id === bankFilter);
     const opening = scope.reduce((sum, b) => {
       const prior = store.transactions
-        .filter((t) => t.accountId === b.id && t.sourceType === "bank" && !t.voided && t.date < from)
+        .filter(
+          (t) =>
+            t.accountId === b.id &&
+            t.sourceType === "bank" &&
+            !t.voided &&
+            isLedgerEntry(t) &&
+            t.date < from,
+        )
         .reduce((s, t) => s + (t.direction === "in" ? t.amount : -t.amount), 0);
       return sum + b.openingBalance + prior;
     }, 0);
     return { credit, debit, opening, closing: opening + credit - debit };
-  }, [rows, store.bankAccounts, store.transactions, from, bankFilter]);
+  }, [postedRows, store.bankAccounts, store.transactions, from, bankFilter]);
 
   const bankBalance = (id: string) => store.balanceOf("bank", id);
   const totalBalance = BANKS.reduce((s, b) => s + bankBalance(b.id), 0);
 
   const reportRows = (): ReportRow[] =>
-    [...rows]
+    [...postedRows]
       .sort((a, b) =>
         a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
       )
@@ -249,7 +272,9 @@ function BankLedgerPage() {
     <div className="space-y-4 pb-8">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">Bank Ledger</h1>
+        <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">
+          Bank Ledger
+        </h1>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={preset} onValueChange={(v) => setPreset(v as BankPreset)}>
             <SelectTrigger aria-label="Date filter" className="h-9 w-[168px] text-sm">
@@ -331,12 +356,16 @@ function BankLedgerPage() {
           return (
             <div key={b.id} className={cn("rounded-xl border border-border p-4", b.bg)}>
               <div className="flex items-start justify-between gap-3">
-                <p className="min-w-0 text-sm font-semibold leading-tight text-navy">{b.bankName}</p>
+                <p className="min-w-0 text-sm font-semibold leading-tight text-navy">
+                  {b.bankName}
+                </p>
                 <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-card/70 text-navy">
                   <Landmark className="size-[18px]" />
                 </span>
               </div>
-              <p className="num mt-3 text-xl font-semibold text-navy">{formatMoney(bankBalance(b.id))}</p>
+              <p className="num mt-3 text-xl font-semibold text-navy">
+                {formatMoney(bankBalance(b.id))}
+              </p>
               <p className="mt-1 text-xs text-navy/60">
                 {updated ? `Updated ${formatDateTime(updated)}` : "No entries yet"}
               </p>
@@ -364,16 +393,19 @@ function BankLedgerPage() {
           </h2>
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span>
-              Opening <span className="num font-semibold text-navy">{formatMoney(totals.opening)}</span>
+              Opening{" "}
+              <span className="num font-semibold text-navy">{formatMoney(totals.opening)}</span>
             </span>
             <span>
-              Credit <span className="num font-semibold text-pos">{formatMoney(totals.credit)}</span>
+              Credit{" "}
+              <span className="num font-semibold text-pos">{formatMoney(totals.credit)}</span>
             </span>
             <span>
               Debit <span className="num font-semibold text-neg">{formatMoney(totals.debit)}</span>
             </span>
             <span>
-              Closing <span className="num font-semibold text-navy">{formatMoney(totals.closing)}</span>
+              Closing{" "}
+              <span className="num font-semibold text-navy">{formatMoney(totals.closing)}</span>
             </span>
           </div>
         </div>
@@ -401,8 +433,12 @@ function BankLedgerPage() {
                 <tbody>
                   {rows.map((t) => (
                     <tr key={t.id} className="border-t border-border align-top">
-                      <td className="whitespace-nowrap px-3 py-2 text-foreground">{formatDate(t.date)}</td>
-                      <td className="whitespace-nowrap px-3 py-2 text-foreground">{bankName(t.accountId)}</td>
+                      <td className="whitespace-nowrap px-3 py-2 text-foreground">
+                        {formatDate(t.date)}
+                      </td>
+                      <td className="whitespace-nowrap px-3 py-2 text-foreground">
+                        {bankName(t.accountId)}
+                      </td>
                       <td className="px-3 py-2">
                         <BankCategoryBadge id={t.category} />
                       </td>
@@ -424,13 +460,10 @@ function BankLedgerPage() {
                         {formatMoney(balances.get(t.id) ?? 0)}
                       </td>
                       <td className="px-2 py-2 text-right">
-                        <RowMenu
+                        <EntryRowMenu
                           onView={() => setViewing(t)}
-                          onEdit={() => {
-                            setEditing(t);
-                            setFormOpen(true);
-                          }}
-                          onVoid={() => setVoiding(t)}
+                          onEdit={() => openEdit(t)}
+                          onDelete={() => setDeleting(t)}
                         />
                       </td>
                     </tr>
@@ -448,8 +481,10 @@ function BankLedgerPage() {
                       <p className="text-xs text-muted-foreground">
                         {formatDate(t.date)} · {bankName(t.accountId)}
                       </p>
-                      <p className="mt-1 break-words text-sm font-medium text-navy">{t.particulars}</p>
-                      <div className="mt-1.5">
+                      <p className="mt-1 break-words text-sm font-medium text-navy">
+                        {t.particulars}
+                      </p>
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <BankCategoryBadge id={t.category} />
                       </div>
                     </div>
@@ -466,13 +501,10 @@ function BankLedgerPage() {
                       <span className="num text-xs text-muted-foreground">
                         Bal {formatMoney(balances.get(t.id) ?? 0)}
                       </span>
-                      <RowMenu
+                      <EntryRowMenu
                         onView={() => setViewing(t)}
-                        onEdit={() => {
-                          setEditing(t);
-                          setFormOpen(true);
-                        }}
-                        onVoid={() => setVoiding(t)}
+                        onEdit={() => openEdit(t)}
+                        onDelete={() => setDeleting(t)}
                       />
                     </div>
                   </div>
@@ -504,6 +536,8 @@ function BankLedgerPage() {
                 ["Date", formatDate(viewing.date)],
                 ["Bank", bankName(viewing.accountId)],
                 ["Category", bankCategoryLabel(viewing.category)],
+                ["Transfer ID", viewing.transferGroupId ?? "—"],
+                ["Created by", viewing.createdBy],
                 ["Type", viewing.direction === "in" ? "Credit (received)" : "Debit (paid)"],
                 ["Amount", formatMoney(viewing.amount)],
                 ["Balance after", formatMoney(balances.get(viewing.id) ?? 0)],
@@ -514,21 +548,24 @@ function BankLedgerPage() {
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-4 border-b border-border pb-1.5">
                   <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">{v}</dd>
+                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">
+                    {v}
+                  </dd>
                 </div>
               ))}
+              <EntryHistory t={viewing} />
             </dl>
           ) : null}
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!voiding} onOpenChange={(o) => !o && setVoiding(null)}>
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>Delete / void this entry?</AlertDialogTitle>
             <AlertDialogDescription>
-              {voiding
-                ? `${formatMoney(voiding.amount)} on ${formatDate(voiding.date)} will be removed from balances${voiding.transferGroupId ? " along with its linked transfer entry" : ""}. It stays in the audit log.`
+              {deleting
+                ? `${formatMoney(deleting.amount)} on ${formatDate(deleting.date)}${deleting.transferGroupId ? " and its matching transfer entry" : ""} will be removed from the books.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -537,11 +574,9 @@ function BankLedgerPage() {
             <AlertDialogAction
               className="bg-neg text-white hover:bg-neg/90"
               onClick={() => {
-                if (voiding) {
-                  store.voidEntry(voiding.id);
-                  toast.success("Entry voided.");
-                }
-                setVoiding(null);
+                if (deleting) store.voidEntry(deleting.id);
+                setDeleting(null);
+                toast.success("Entry voided.");
               }}
             >
               Delete entry
@@ -550,33 +585,6 @@ function BankLedgerPage() {
         </AlertDialogContent>
       </AlertDialog>
     </div>
-  );
-}
-
-function RowMenu({
-  onView,
-  onEdit,
-  onVoid,
-}: {
-  onView: () => void;
-  onEdit: () => void;
-  onVoid: () => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Row actions">
-          <MoreVertical className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={onView}>View</DropdownMenuItem>
-        <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
-        <DropdownMenuItem className="text-neg" onClick={onVoid}>
-          Delete / Void
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 
@@ -603,10 +611,14 @@ function BankEntryForm({
         ? {
             date: editing.date,
             accountId: editing.accountId,
-            direction: editing.direction,
-            category: editing.category ?? "",
+            direction:
+              uiCategoryFromCategoryId(editing.category) === "uchhina"
+                ? editing.direction
+                : editing.direction,
+            category: uiCategoryFromCategoryId(editing.category),
+            destinationKind: "",
             destinationId: "",
-            person: editing.partyId ? partyName(store.parties, editing.partyId) : "",
+            partyName: partyName(store.parties, editing.partyId) === "—" ? "" : partyName(store.parties, editing.partyId),
             particulars: editing.particulars,
             amount: String(editing.amount),
             reference: editing.reference ?? "",
@@ -620,11 +632,29 @@ function BankEntryForm({
     setForm((f) => ({ ...f, [k]: v }));
 
   const isTransfer = form.category === "bank_transfer";
-  const uchhina = isUchhina(form.category || null);
-  const direction: "in" | "out" = isTransfer
-    ? "out"
-    : (uchhinaDirection(form.category || null) ?? form.direction);
+  const isUchhina = form.category === "uchhina";
+  const needsParty = form.category === "sale_payment" || form.category === "purchase_payment";
+  const fixed = bankFixedDirection(form.category);
+  const direction: "in" | "out" = fixed ?? form.direction;
   const amount = Number(form.amount) || 0;
+
+  useEffect(() => {
+    if (fixed && form.direction !== fixed) setForm((f) => ({ ...f, direction: fixed }));
+  }, [fixed, form.direction]);
+
+  const destinationOptions = useMemo(
+    () => [
+      ...BANKS.filter((b) => b.id !== form.accountId).map((b) => ({
+        kind: "bank" as const,
+        id: b.id,
+        name: b.bankName,
+      })),
+      ...store.cashLocations
+        .filter((c) => c.active)
+        .map((c) => ({ kind: "cash" as const, id: c.id, name: c.name })),
+    ],
+    [form.accountId, store.cashLocations],
+  );
 
   const duplicate = useMemo(() => {
     if (!(amount > 0)) return null;
@@ -651,16 +681,16 @@ function BankEntryForm({
       toast.error("Select a category.");
       return;
     }
-    if (uchhina && !form.person.trim()) {
-      toast.error("Person name is required for an Uchhina entry.");
+    if (isTransfer && !form.destinationId) {
+      toast.error("Select the transfer destination.");
       return;
     }
-    if (uchhina && !form.particulars.trim()) {
-      toast.error("Particulars are required for an Uchhina entry.");
+    if (isTransfer && form.destinationKind === "bank" && form.destinationId === form.accountId) {
+      toast.error("Transfer destination must be different from the source account.");
       return;
     }
-    if (isTransfer && form.destinationId === form.accountId) {
-      toast.error("Transfer destination must be a different bank.");
+    if (needsParty && !form.partyName.trim()) {
+      toast.error("Select or enter a party.");
       return;
     }
     if (duplicate && !dupAck) {
@@ -669,25 +699,40 @@ function BankEntryForm({
       return;
     }
     setSaving(true);
+
     let partyId: string | null = null;
-    if (uchhina) {
-      const name = form.person.trim();
-      partyId =
-        store.parties.find((p) => p.name.trim().toLowerCase() === name.toLowerCase())?.id ??
-        store.addParty(name, "other").id;
+    if (needsParty) {
+      const name = form.partyName.trim();
+      const existing = store.parties.find((p) => p.name.toLowerCase() === name.toLowerCase());
+      partyId = existing
+        ? existing.id
+        : store.addParty(name, form.category === "sale_payment" ? "customer" : "supplier").id;
     }
+
+    const category: CategoryId = isUchhina
+      ? resolveUchhinaCategory(direction)
+      : isTransfer
+        ? resolveTransferCategory(form.destinationKind as "bank" | "cash")
+        : (form.category as CategoryId);
+
     const input: NewEntryInput = {
       date: form.date,
       sourceType: "bank",
       accountId: form.accountId,
       direction,
       amount,
-      category: form.category,
+      category,
       partyId,
       particulars: form.particulars,
       reference: form.reference.trim() || undefined,
       notes: form.notes.trim() || undefined,
-      ...(isTransfer ? { destinationType: "bank" as const, destinationId: form.destinationId } : {}),
+      ledger: true,
+      ...(isTransfer
+        ? {
+            destinationType: form.destinationKind as "bank" | "cash",
+            destinationId: form.destinationId,
+          }
+        : {}),
     };
     const res = editing ? store.updateEntry(editing.id, input) : store.addEntry(input);
     if (!res.ok) {
@@ -736,51 +781,52 @@ function BankEntryForm({
             <Field label="Category">
               <Select
                 value={form.category}
-                onValueChange={(v) => set("category", v as CategoryId)}
+                onValueChange={(v) =>
+                  setForm((f) => ({
+                    ...f,
+                    category: v as BankUiCategory,
+                    destinationKind: "",
+                    destinationId: "",
+                  }))
+                }
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select category" />
                 </SelectTrigger>
                 <SelectContent>
-                  {BANK_CATEGORIES.filter((c) => !(editing && c.id === "bank_transfer")).map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.label}
-                    </SelectItem>
-                  ))}
+                  {BANK_ENTRY_OPTIONS.filter((c) => !(editing && c.id === "bank_transfer")).map(
+                    (c) => (
+                      <SelectItem key={c.id} value={c.id}>
+                        {c.label}
+                      </SelectItem>
+                    ),
+                  )}
                 </SelectContent>
               </Select>
             </Field>
 
-            {uchhina ? (
-              <Field label="Person name">
-                <Input
-                  value={form.person}
-                  placeholder="e.g. Mehul Bhai"
-                  list="uchhina-people"
-                  onChange={(e) => set("person", e.target.value)}
-                />
-                <datalist id="uchhina-people">
-                  {store.parties.map((p) => (
-                    <option key={p.id} value={p.name} />
-                  ))}
-                </datalist>
-              </Field>
-            ) : isTransfer ? (
-              <Field label="Destination bank">
-                <Select value={form.destinationId} onValueChange={(v) => set("destinationId", v)}>
+            {isTransfer ? (
+              <Field label="Destination">
+                <Select
+                  value={form.destinationKind && form.destinationId ? `${form.destinationKind}:${form.destinationId}` : ""}
+                  onValueChange={(v) => {
+                    const [kind, id] = v.split(":");
+                    setForm((f) => ({ ...f, destinationKind: kind as "bank" | "cash", destinationId: id ?? "" }));
+                  }}
+                >
                   <SelectTrigger>
-                    <SelectValue placeholder="Select bank" />
+                    <SelectValue placeholder="Select bank or cash book" />
                   </SelectTrigger>
                   <SelectContent>
-                    {BANKS.filter((b) => b.id !== form.accountId).map((b) => (
-                      <SelectItem key={b.id} value={b.id}>
-                        {b.bankName}
+                    {destinationOptions.map((o) => (
+                      <SelectItem key={`${o.kind}:${o.id}`} value={`${o.kind}:${o.id}`}>
+                        {o.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
               </Field>
-            ) : (
+            ) : fixed ? null : (
               <Field label="Entry type">
                 <div className="grid grid-cols-2 gap-2">
                   {(["in", "out"] as const).map((d) => (
@@ -797,7 +843,13 @@ function BankEntryForm({
                           : "border-border text-muted-foreground hover:bg-muted",
                       )}
                     >
-                      {d === "in" ? "Credit" : "Debit"}
+                      {isUchhina
+                        ? d === "in"
+                          ? "Received back"
+                          : "Given"
+                        : d === "in"
+                          ? "Credit"
+                          : "Debit"}
                     </button>
                   ))}
                 </div>
@@ -805,20 +857,24 @@ function BankEntryForm({
             )}
           </div>
 
-          {uchhina ? (
-            <p className="rounded-md bg-pl-purple px-3 py-2 text-xs text-navy">
-              This entry is recorded as{" "}
-              <strong>{uchhinaTypeLabel(form.category || null)}</strong>{" "}
-              and appears automatically in the person-wise Uchhina ledger. Uchhina is excluded from
-              sales, purchases, income and expenses.
-            </p>
+          {needsParty ? (
+            <Field label={form.category === "sale_payment" ? "Customer" : "Supplier"}>
+              <Combo
+                value={form.partyName}
+                onChange={(v) => set("partyName", v)}
+                options={store.parties
+                  .filter((p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"))
+                  .map((p) => p.name)}
+                placeholder="Select or type a party"
+              />
+            </Field>
           ) : null}
 
           {isTransfer ? (
             <p className="rounded-md bg-pl-blue px-3 py-2 text-xs text-navy">
-              Two linked entries will be created with the same transfer reference — debit from the
-              source bank and credit to the destination bank. Internal transfers are excluded from
-              sales, purchases, income and expenses.
+              Two matching entries will be created with the same transfer reference — debit from the
+              source bank and credit to the destination account. Transfers are excluded from sales,
+              purchases, income and expenses.
             </p>
           ) : null}
 
@@ -832,15 +888,7 @@ function BankEntryForm({
 
           <div className="grid gap-3 sm:grid-cols-2">
             <Field label="Amount">
-              <Input
-                type="number"
-                min="0"
-                step="0.01"
-                inputMode="decimal"
-                value={form.amount}
-                placeholder="0.00"
-                onChange={(e) => set("amount", e.target.value)}
-              />
+              <MoneyInput value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
             </Field>
             <Field label="Reference / UTR (optional)">
               <Input value={form.reference} onChange={(e) => set("reference", e.target.value)} />
@@ -848,11 +896,7 @@ function BankEntryForm({
           </div>
 
           <Field label="Notes (optional)">
-            <Textarea
-              rows={2}
-              value={form.notes}
-              onChange={(e) => set("notes", e.target.value)}
-            />
+            <Textarea rows={2} value={form.notes} onChange={(e) => set("notes", e.target.value)} />
           </Field>
 
           {duplicate ? (

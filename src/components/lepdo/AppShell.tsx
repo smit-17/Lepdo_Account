@@ -230,30 +230,32 @@ export function AppShell({ children }: { children: ReactNode }) {
 
               <div className="hidden flex-1 lg:block" />
 
-              <div className="hidden items-center gap-2 lg:flex">
-                <div className="relative w-[220px]">
-                  <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    placeholder="Search transactions"
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    className="h-9 pl-8"
-                  />
-                </div>
-                {path === "/uchhina" ? (
-                  quickUchhina ? (
-                    <Button className="h-9" onClick={quickUchhina}>
-                      <Plus className="size-4" /> Quick Uchhina
+              {path === "/" ? null : (
+                <div className="hidden items-center gap-2 lg:flex">
+                  <div className="relative w-[220px]">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Search transactions"
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      className="h-9 pl-8"
+                    />
+                  </div>
+                  {path === "/uchhina" ? (
+                    quickUchhina ? (
+                      <Button className="h-9" onClick={quickUchhina}>
+                        <Plus className="size-4" /> Quick Uchhina
+                      </Button>
+                    ) : null
+                  ) : pageAction ? (
+                    <Button className="h-9" onClick={pageAction.run}>
+                      <Plus className="size-4" /> {pageAction.label}
                     </Button>
-                  ) : null
-                ) : pageAction ? (
-                  <Button className="h-9" onClick={pageAction.run}>
-                    <Plus className="size-4" /> {pageAction.label}
-                  </Button>
-                ) : (
-                  <QuickEntryMenu onPick={setDrawer} />
-                )}
-              </div>
+                  ) : (
+                    <QuickEntryMenu onPick={setDrawer} />
+                  )}
+                </div>
+              )}
 
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

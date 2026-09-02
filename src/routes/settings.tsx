@@ -1,6 +1,7 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import lepdoLogo from "@/assets/lepdo-logo.png.asset.json";
 import { createFileRoute } from "@tanstack/react-router";
-import { Eye, Plus, RotateCcw, Save } from "lucide-react";
+import { Eye, Pencil, Plus, RotateCcw, Save, Trash2, Upload, X, Download, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,8 +18,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { PageHeading } from "@/components/lepdo/bits";
+import { NumInput } from "@/components/lepdo/numeric";
 import {
-  Chip,
   DownloadMenu,
   EmptyState,
   Field,
@@ -27,11 +28,12 @@ import {
   StatCard,
   TextField,
 } from "@/components/lepdo/shared";
-import { formatDateTime, formatMoney } from "@/lib/lepdo/format";
+import { cn } from "@/lib/utils";
+import { formatDateTime, formatMoney, uid } from "@/lib/lepdo/format";
 import { useLepdo } from "@/lib/lepdo/store";
 import { DEFAULT_SETTINGS } from "@/lib/lepdo/extras";
-import { EXPENSE_CATEGORIES } from "@/lib/lepdo/expense";
-import type { AppSettings } from "@/lib/lepdo/types";
+import { MASTERS } from "@/lib/lepdo/masters";
+import type { AppSettings, AppUser, Contact, MasterValue, UserPermission } from "@/lib/lepdo/types";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -64,6 +66,47 @@ const TABS: { id: TabId; label: string }[] = [
   { id: "rules", label: "Accounting Rules" },
   { id: "security", label: "Users & Security" },
 ];
+
+const INVOICE_TITLES = ["Invoice", "Tax Invoice", "Proforma Invoice", "Purchase Bill"];
+
+const PERMISSION_PAGES = [
+  "Dashboard",
+  "Sales",
+  "Purchase",
+  "Expense",
+  "Bank Ledger",
+  "Cash Book",
+  "Uchhina",
+  "Drawings",
+  "Capital",
+  "Stock",
+  "Team",
+  "Goals",
+  "Reports",
+  "P&L",
+  "Settings",
+];
+
+const PERMISSION_KEYS: (keyof Omit<UserPermission, "page">)[] = [
+  "view",
+  "add",
+  "edit",
+  "void",
+  "download",
+  "settings",
+];
+
+function defaultPermissions(): UserPermission[] {
+  return PERMISSION_PAGES.map((page) => ({
+    page,
+    view: false,
+    add: false,
+    edit: false,
+    void: false,
+    download: false,
+    settings: false,
+  }));
+}
 
 function Settings() {
   const store = useLepdo();
@@ -149,6 +192,11 @@ function Settings() {
               onChange={(v) => patch("business", { gstin: v })}
             />
             <TextField
+              label="IEC number"
+              value={draft.business.iec ?? ""}
+              onChange={(v) => patch("business", { iec: v })}
+            />
+            <TextField
               label="Phone"
               value={draft.business.phone}
               onChange={(v) => patch("business", { phone: v })}
@@ -178,11 +226,19 @@ function Settings() {
               value={draft.business.currency}
               onChange={(v) => patch("business", { currency: v })}
             />
-            <Field label="Address" className="sm:col-span-2 lg:col-span-3">
+            <Field label="India address" className="sm:col-span-2 lg:col-span-3">
               <Textarea
                 rows={2}
                 value={draft.business.address}
                 onChange={(e) => patch("business", { address: e.target.value })}
+                className="text-sm"
+              />
+            </Field>
+            <Field label="USA address" className="sm:col-span-2 lg:col-span-3">
+              <Textarea
+                rows={2}
+                value={draft.business.usaAddress ?? ""}
+                onChange={(e) => patch("business", { usaAddress: e.target.value })}
                 className="text-sm"
               />
             </Field>
@@ -194,15 +250,20 @@ function Settings() {
         <div className="grid grid-cols-1 gap-4 lg:grid-cols-[1fr_360px]">
           <SectionCard title="Branding">
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <TextField
+              <ColorField
                 label="Primary colour"
                 value={draft.branding.primary}
                 onChange={(v) => patch("branding", { primary: v })}
               />
-              <TextField
+              <ColorField
                 label="Accent / pastel colour"
                 value={draft.branding.accent}
                 onChange={(v) => patch("branding", { accent: v })}
+              />
+              <ColorField
+                label="Card pastel background"
+                value={draft.branding.pastel ?? "#F3F4FB"}
+                onChange={(v) => patch("branding", { pastel: v })}
               />
               <TextField
                 label="Font"
@@ -214,13 +275,55 @@ function Settings() {
                 value={draft.branding.invoiceHeader}
                 onChange={(v) => patch("branding", { invoiceHeader: v })}
               />
-              <Field label="Invoice footer" className="sm:col-span-2">
+              <Field label="Invoice footer">
                 <Textarea
                   rows={2}
                   value={draft.branding.invoiceFooter}
                   onChange={(e) => patch("branding", { invoiceFooter: e.target.value })}
                   className="text-sm"
                 />
+              </Field>
+              <Field label="Logo" className="sm:col-span-2">
+                <div className="flex flex-wrap items-center gap-3">
+                  <img
+                    src={draft.branding.logoDataUrl || lepdoLogo.url}
+                    alt="Logo preview"
+                    className="h-12 w-12 rounded-md border border-border bg-muted/40 object-contain"
+                  />
+                  {!draft.branding.logoDataUrl ? (
+                    <span className="text-[11px] text-muted-foreground">
+                      Using the default LEPDO logo
+                    </span>
+                  ) : null}
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-xs font-medium hover:bg-muted/60">
+                    <Upload className="size-3.5" />
+                    {draft.branding.logoDataUrl ? "Replace" : "Upload"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          patch("branding", { logoDataUrl: String(reader.result ?? "") });
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = "";
+                      }}
+                    />
+                  </label>
+                  {draft.branding.logoDataUrl ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => patch("branding", { logoDataUrl: "" })}
+                    >
+                      <X className="size-3.5" /> Remove
+                    </Button>
+                  ) : null}
+                </div>
               </Field>
             </div>
           </SectionCard>
@@ -233,28 +336,45 @@ function Settings() {
       {tab === "invoice" ? (
         <SectionCard title="Invoice settings">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <Field label="Invoice title">
+              <select
+                value={draft.invoice.title ?? "Invoice"}
+                onChange={(e) => patch("invoice", { title: e.target.value })}
+                className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+              >
+                {INVOICE_TITLES.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
+              </select>
+            </Field>
             <TextField
               label="Sales prefix"
               value={draft.invoice.salesPrefix}
               onChange={(v) => patch("invoice", { salesPrefix: v })}
             />
-            <TextField
-              label="Sales starting number"
-              type="number"
-              value={draft.invoice.salesStart}
-              onChange={(v) => patch("invoice", { salesStart: Number(v) || 1 })}
-            />
+            <Field label="Sales starting number">
+              <NumInput
+                className="h-9"
+                decimals={0}
+                value={draft.invoice.salesStart}
+                onChange={(v) => patch("invoice", { salesStart: v || 1 })}
+              />
+            </Field>
             <TextField
               label="Purchase prefix"
               value={draft.invoice.purchasePrefix}
               onChange={(v) => patch("invoice", { purchasePrefix: v })}
             />
-            <TextField
-              label="Purchase starting number"
-              type="number"
-              value={draft.invoice.purchaseStart}
-              onChange={(v) => patch("invoice", { purchaseStart: Number(v) || 1 })}
-            />
+            <Field label="Purchase starting number">
+              <NumInput
+                className="h-9"
+                decimals={0}
+                value={draft.invoice.purchaseStart}
+                onChange={(v) => patch("invoice", { purchaseStart: v || 1 })}
+              />
+            </Field>
             <TextField
               label="Diamond format"
               value={draft.invoice.diamondFormat}
@@ -265,30 +385,38 @@ function Settings() {
               value={draft.invoice.jewelryFormat}
               onChange={(v) => patch("invoice", { jewelryFormat: v })}
             />
-            <TextField
-              label="Default due days"
-              type="number"
-              value={draft.invoice.defaultDueDays}
-              onChange={(v) => patch("invoice", { defaultDueDays: Number(v) || 0 })}
-            />
-            <TextField
-              label="Default tax rate %"
-              type="number"
-              value={draft.invoice.defaultTaxRate}
-              onChange={(v) => patch("invoice", { defaultTaxRate: Number(v) || 0 })}
-            />
-            <TextField
-              label="Default discount"
-              type="number"
-              value={draft.invoice.defaultDiscount}
-              onChange={(v) => patch("invoice", { defaultDiscount: Number(v) || 0 })}
-            />
-            <TextField
-              label="Default shipping"
-              type="number"
-              value={draft.invoice.shipping}
-              onChange={(v) => patch("invoice", { shipping: Number(v) || 0 })}
-            />
+            <Field label="Default due days">
+              <NumInput
+                className="h-9"
+                decimals={0}
+                value={draft.invoice.defaultDueDays}
+                onChange={(v) => patch("invoice", { defaultDueDays: v })}
+              />
+            </Field>
+            <Field label="Default tax rate %">
+              <NumInput
+                className="h-9"
+                decimals={4}
+                value={draft.invoice.defaultTaxRate}
+                onChange={(v) => patch("invoice", { defaultTaxRate: v })}
+              />
+            </Field>
+            <Field label="Default discount">
+              <NumInput
+                className="h-9"
+                decimals={2}
+                value={draft.invoice.defaultDiscount}
+                onChange={(v) => patch("invoice", { defaultDiscount: v })}
+              />
+            </Field>
+            <Field label="Default shipping">
+              <NumInput
+                className="h-9"
+                decimals={2}
+                value={draft.invoice.shipping}
+                onChange={(v) => patch("invoice", { shipping: v })}
+              />
+            </Field>
             <Field label="Round off totals">
               <div className="flex h-9 items-center">
                 <Switch
@@ -414,6 +542,35 @@ function Settings() {
   );
 }
 
+function ColorField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+}) {
+  const safe = /^#[0-9a-fA-F]{6}$/.test(value) ? value : "#000000";
+  return (
+    <Field label={label}>
+      <div className="flex items-center gap-2">
+        <input
+          type="color"
+          value={safe}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 w-9 shrink-0 cursor-pointer rounded-md border border-input bg-background p-0.5"
+        />
+        <Input
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          className="h-9 text-sm"
+        />
+      </div>
+    </Field>
+  );
+}
+
 function ToggleRow({
   label,
   hint,
@@ -440,12 +597,24 @@ function InvoicePreview({ settings, full }: { settings: AppSettings; full?: bool
   return (
     <div className="rounded-lg border border-border bg-card p-4 text-sm">
       <div
-        className="rounded-md px-3 py-2 text-sm font-semibold"
+        className="flex items-center gap-3 rounded-md px-3 py-2 text-sm font-semibold"
         style={{ background: settings.branding.accent, color: settings.branding.primary }}
       >
-        {settings.branding.invoiceHeader || settings.business.name}
+        {settings.branding.logoDataUrl ? (
+          <img
+            src={settings.branding.logoDataUrl}
+            alt="Logo"
+            className="h-8 w-8 rounded bg-white object-contain p-0.5"
+          />
+        ) : null}
+        <span className="min-w-0 truncate">
+          {settings.branding.invoiceHeader || settings.business.name}
+        </span>
       </div>
-      <p className="mt-2 text-xs text-muted-foreground">
+      <p className="mt-2 text-xs font-semibold uppercase tracking-wide text-navy">
+        {settings.invoice.title ?? "Invoice"}
+      </p>
+      <p className="mt-1 text-xs text-muted-foreground">
         {settings.business.legalName}
         {settings.business.gstin ? ` · GSTIN ${settings.business.gstin}` : ""}
       </p>
@@ -484,37 +653,527 @@ function InvoicePreview({ settings, full }: { settings: AppSettings; full?: bool
   );
 }
 
-function MasterData() {
-  const store = useLepdo();
-  const [bank, setBank] = useState({ bankName: "", nickname: "", last4: "", openingBalance: "" });
-  const [cash, setCash] = useState({ name: "", openingBalance: "" });
-  const [party, setParty] = useState("");
+/* ================= Master Data ================= */
 
-  const platforms = useMemo(
-    () =>
-      Array.from(
-        new Set(store.salesInvoices.map((i) => i.platform).filter((p): p is string => !!p)),
-      ),
-    [store.salesInvoices],
+type PanelId =
+  | "customers"
+  | "suppliers"
+  | "sellers"
+  | "brokers"
+  | "bankAccounts"
+  | "cashBooks"
+  | (typeof MASTERS)[number]["id"];
+
+function MasterData() {
+  const [panel, setPanel] = useState<PanelId>("platforms");
+
+  const groups: { label: string; items: { id: PanelId; label: string }[] }[] = [
+    {
+      label: "Contacts",
+      items: [
+        { id: "customers", label: "Customers" },
+        { id: "suppliers", label: "Suppliers" },
+        { id: "sellers", label: "Sellers" },
+        { id: "brokers", label: "Brokers" },
+      ],
+    },
+    {
+      label: "Accounts",
+      items: [
+        { id: "bankAccounts", label: "Bank Accounts" },
+        { id: "cashBooks", label: "Cash Books" },
+      ],
+    },
+    {
+      label: "Dropdown lists",
+      items: MASTERS.map((m) => ({ id: m.id as PanelId, label: m.label })),
+    },
+  ];
+
+  return (
+    <div className="grid grid-cols-1 gap-4 lg:grid-cols-[200px_1fr]">
+      <div className="flex flex-wrap gap-1.5 lg:flex-col lg:flex-nowrap lg:gap-3 lg:overflow-y-auto lg:max-h-[70vh] lg:pr-1">
+        {groups.map((g) => (
+          <div key={g.label} className="lg:w-full">
+            <p className="mb-1 hidden text-[10px] font-semibold uppercase tracking-wide text-muted-foreground lg:block">
+              {g.label}
+            </p>
+            <div className="flex flex-wrap gap-1.5 lg:flex-col">
+              {g.items.map((it) => (
+                <button
+                  key={it.id}
+                  type="button"
+                  onClick={() => setPanel(it.id)}
+                  className={cn(
+                    "rounded-md px-2.5 py-1.5 text-left text-xs font-medium transition",
+                    panel === it.id
+                      ? "bg-navy text-navy-foreground"
+                      : "bg-muted/60 text-foreground hover:bg-muted",
+                  )}
+                >
+                  {it.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+      <div className="min-w-0">
+        {panel === "customers" ? <PartyPanel type="customer" title="Customers" /> : null}
+        {panel === "suppliers" ? <PartyPanel type="supplier" title="Suppliers" /> : null}
+        {panel === "sellers" ? <ContactPanel kind="seller" title="Sellers" /> : null}
+        {panel === "brokers" ? <ContactPanel kind="broker" title="Brokers" /> : null}
+        {panel === "bankAccounts" ? <BankAccountsPanel /> : null}
+        {panel === "cashBooks" ? <CashBooksPanel /> : null}
+        {MASTERS.some((m) => m.id === panel) ? (
+          <MasterListPanel
+            masterId={panel}
+            title={MASTERS.find((m) => m.id === panel)?.label ?? ""}
+            hint={MASTERS.find((m) => m.id === panel)?.hint ?? ""}
+          />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/** Generic reusable panel for any list in MASTERS. */
+function MasterListPanel({ masterId, title, hint }: { masterId: string; title: string; hint: string }) {
+  const store = useLepdo();
+  const [search, setSearch] = useState("");
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+
+  const items = store.masters[masterId] ?? [];
+  const filtered = items.filter((v) => v.name.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const isDuplicate = (name: string, ignoreId?: string) =>
+    items.some((v) => v.id !== ignoreId && v.name.trim().toLowerCase() === name.trim().toLowerCase());
+
+  const add = () => {
+    const name = newName.trim();
+    if (!name) return;
+    if (isDuplicate(name)) {
+      toast.error(`"${name}" already exists.`);
+      return;
+    }
+    store.saveMaster(masterId, { name });
+    setNewName("");
+    toast.success("Added.");
+  };
+
+  const rename = () => {
+    if (!editing) return;
+    const name = editing.name.trim();
+    if (!name) return;
+    if (isDuplicate(name, editing.id)) {
+      toast.error(`"${name}" already exists.`);
+      return;
+    }
+    store.saveMaster(masterId, { id: editing.id, name });
+    setEditing(null);
+    toast.success("Updated.");
+  };
+
+  const remove = (v: MasterValue) => {
+    const res = store.removeMaster(masterId, v.id);
+    if (res.ok) toast.success(res.message);
+    else toast.message(res.message);
+  };
+
+  return (
+    <SectionCard title={title}>
+      <p className="mb-2 text-[11px] text-muted-foreground">{hint}</p>
+      <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_auto]">
+        <Input
+          placeholder="Search…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          className="h-9 text-sm"
+        />
+      </div>
+      <div className="max-h-[360px] space-y-1.5 overflow-y-auto pr-1">
+        {filtered.length === 0 ? (
+          <EmptyState title="No values" hint="Add one below." />
+        ) : (
+          filtered.map((v) => (
+            <div
+              key={v.id}
+              className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5"
+            >
+              {editing?.id === v.id ? (
+                <Input
+                  value={editing.name}
+                  onChange={(e) => setEditing({ id: v.id, name: e.target.value })}
+                  className="h-8 flex-1 text-sm"
+                  autoFocus
+                />
+              ) : (
+                <span
+                  className={cn(
+                    "min-w-0 flex-1 truncate text-sm",
+                    !v.active && "text-muted-foreground line-through",
+                  )}
+                >
+                  {v.name}
+                </span>
+              )}
+              {editing?.id === v.id ? (
+                <>
+                  <Button size="sm" variant="outline" onClick={rename}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setEditing({ id: v.id, name: v.name })}
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => store.setMasterActive(masterId, v.id, !v.active)}
+                  >
+                    {v.active ? "Deactivate" : "Activate"}
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => remove(v)}>
+                    <Trash2 className="size-3.5" />
+                  </Button>
+                </>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Input
+          placeholder="Add new value…"
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          className="h-9 flex-1 text-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+        />
+        <Button size="sm" disabled={!newName.trim()} onClick={add}>
+          <Plus className="size-4" /> Add
+        </Button>
+      </div>
+    </SectionCard>
+  );
+}
+
+function PartyPanel({ type, title }: { type: "customer" | "supplier"; title: string }) {
+  const store = useLepdo();
+  const [search, setSearch] = useState("");
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+
+  const items = store.parties.filter((p) => p.type === type);
+  const filtered = items.filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const isDuplicate = (name: string, ignoreId?: string) =>
+    items.some((p) => p.id !== ignoreId && p.name.trim().toLowerCase() === name.trim().toLowerCase());
+
+  const add = () => {
+    const name = newName.trim();
+    if (!name) return;
+    if (isDuplicate(name)) {
+      toast.error(`"${name}" already exists.`);
+      return;
+    }
+    store.saveCustomer({ name, type });
+    setNewName("");
+    toast.success(`${title.slice(0, -1)} added.`);
+  };
+
+  const rename = () => {
+    if (!editing) return;
+    const name = editing.name.trim();
+    if (!name) return;
+    if (isDuplicate(name, editing.id)) {
+      toast.error(`"${name}" already exists.`);
+      return;
+    }
+    store.saveCustomer({ id: editing.id, name, type });
+    setEditing(null);
+    toast.success("Updated.");
+  };
+
+  return (
+    <SectionCard title={title}>
+      <Input
+        placeholder="Search…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-3 h-9 text-sm"
+      />
+      <div className="max-h-[360px] space-y-1.5 overflow-y-auto pr-1">
+        {filtered.length === 0 ? (
+          <EmptyState title={`No ${title.toLowerCase()} yet`} />
+        ) : (
+          filtered.map((p) => (
+            <div
+              key={p.id}
+              className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5"
+            >
+              {editing?.id === p.id ? (
+                <Input
+                  value={editing.name}
+                  onChange={(e) => setEditing({ id: p.id, name: e.target.value })}
+                  className="h-8 flex-1 text-sm"
+                  autoFocus
+                />
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-sm">{p.name}</span>
+              )}
+              {editing?.id === p.id ? (
+                <>
+                  <Button size="sm" variant="outline" onClick={rename}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing({ id: p.id, name: p.name })}
+                >
+                  <Pencil className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Input
+          placeholder={`Add new ${title.toLowerCase().slice(0, -1)}…`}
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          className="h-9 flex-1 text-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+        />
+        <Button size="sm" disabled={!newName.trim()} onClick={add}>
+          <Plus className="size-4" /> Add
+        </Button>
+      </div>
+    </SectionCard>
+  );
+}
+
+function ContactPanel({ kind, title }: { kind: Contact["kind"]; title: string }) {
+  const store = useLepdo();
+  const [search, setSearch] = useState("");
+  const [newName, setNewName] = useState("");
+  const [editing, setEditing] = useState<{ id: string; name: string } | null>(null);
+
+  const items = kind === "broker" ? store.brokers : store.sellers;
+  const filtered = items.filter((c) => c.name.toLowerCase().includes(search.trim().toLowerCase()));
+
+  const add = () => {
+    const name = newName.trim();
+    if (!name) return;
+    const res = store.saveContact({ kind, name, rateType: "percent" });
+    if (!res.ok) {
+      toast.error(res.message);
+      return;
+    }
+    setNewName("");
+    toast.success(res.message);
+  };
+
+  const rename = () => {
+    if (!editing) return;
+    const name = editing.name.trim();
+    if (!name) return;
+    const existing = items.find((c) => c.id === editing.id);
+    if (!existing) return;
+    const res = store.saveContact({ ...existing, id: editing.id, name });
+    if (!res.ok) {
+      toast.error(res.message);
+      return;
+    }
+    setEditing(null);
+    toast.success(res.message);
+  };
+
+  return (
+    <SectionCard title={title}>
+      <Input
+        placeholder="Search…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-3 h-9 text-sm"
+      />
+      <div className="max-h-[360px] space-y-1.5 overflow-y-auto pr-1">
+        {filtered.length === 0 ? (
+          <EmptyState title={`No ${title.toLowerCase()} yet`} />
+        ) : (
+          filtered.map((c) => (
+            <div
+              key={c.id}
+              className="flex items-center gap-2 rounded-md border border-border bg-muted/30 px-2.5 py-1.5"
+            >
+              {editing?.id === c.id ? (
+                <Input
+                  value={editing.name}
+                  onChange={(e) => setEditing({ id: c.id, name: e.target.value })}
+                  className="h-8 flex-1 text-sm"
+                  autoFocus
+                />
+              ) : (
+                <span className="min-w-0 flex-1 truncate text-sm">
+                  {c.name}
+                  {c.rate ? (
+                    <span className="text-muted-foreground">
+                      {" "}
+                      · {c.rateType === "percent" ? `${c.rate}%` : formatMoney(c.rate)}
+                    </span>
+                  ) : null}
+                </span>
+              )}
+              {editing?.id === c.id ? (
+                <>
+                  <Button size="sm" variant="outline" onClick={rename}>
+                    Save
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={() => setEditing(null)}>
+                    Cancel
+                  </Button>
+                </>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setEditing({ id: c.id, name: c.name })}
+                >
+                  <Pencil className="size-3.5" />
+                </Button>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+      <div className="mt-3 flex gap-2">
+        <Input
+          placeholder={`Add new ${title.toLowerCase().slice(0, -1)}…`}
+          value={newName}
+          onChange={(e) => setNewName(e.target.value)}
+          className="h-9 flex-1 text-sm"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") add();
+          }}
+        />
+        <Button size="sm" disabled={!newName.trim()} onClick={add}>
+          <Plus className="size-4" /> Add
+        </Button>
+      </div>
+    </SectionCard>
+  );
+}
+
+function BankAccountsPanel() {
+  const store = useLepdo();
+  const [search, setSearch] = useState("");
+  const [bank, setBank] = useState({ bankName: "", nickname: "", last4: "", openingBalance: "" });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ bankName: "", nickname: "", openingBalance: "" });
+
+  const filtered = store.bankAccounts.filter(
+    (a) =>
+      a.bankName.toLowerCase().includes(search.trim().toLowerCase()) ||
+      a.nickname.toLowerCase().includes(search.trim().toLowerCase()),
   );
 
   return (
-    <div className="space-y-4">
-      <SectionCard title="Bank accounts">
-        <div className="overflow-x-auto">
-          <Table className="min-w-[640px]">
-            <TableHeader>
-              <TableRow className="bg-muted/60">
-                <TableHead>Bank</TableHead>
-                <TableHead>Nickname</TableHead>
-                <TableHead>Last 4</TableHead>
-                <TableHead className="text-right">Opening</TableHead>
-                <TableHead className="text-right">Current</TableHead>
-                <TableHead className="text-right">Active</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {store.bankAccounts.map((a) => (
+    <SectionCard title="Bank accounts">
+      <Input
+        placeholder="Search bank accounts…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-3 h-9 text-sm"
+      />
+      <div className="overflow-x-auto">
+        <Table className="min-w-[680px]">
+          <TableHeader>
+            <TableRow className="bg-muted/60">
+              <TableHead>Bank</TableHead>
+              <TableHead>Nickname</TableHead>
+              <TableHead>Last 4</TableHead>
+              <TableHead className="text-right">Opening</TableHead>
+              <TableHead className="text-right">Current</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((a) =>
+              editingId === a.id ? (
+                <TableRow key={a.id}>
+                  <TableCell>
+                    <Input
+                      value={editDraft.bankName}
+                      onChange={(e) => setEditDraft({ ...editDraft, bankName: e.target.value })}
+                      className="h-8 text-sm"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      value={editDraft.nickname}
+                      onChange={(e) => setEditDraft({ ...editDraft, nickname: e.target.value })}
+                      className="h-8 text-sm"
+                    />
+                  </TableCell>
+                  <TableCell>••••{a.last4}</TableCell>
+                  <TableCell>
+                    <Input
+                      value={editDraft.openingBalance}
+                      onChange={(e) =>
+                        setEditDraft({ ...editDraft, openingBalance: e.target.value })
+                      }
+                      className="h-8 text-right text-sm"
+                    />
+                  </TableCell>
+                  <TableCell className="num text-right font-semibold">
+                    {formatMoney(store.balanceOf("bank", a.id))}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          store.saveBankAccount({
+                            ...a,
+                            bankName: editDraft.bankName.trim() || a.bankName,
+                            nickname: editDraft.nickname.trim() || a.nickname,
+                            openingBalance: Number(editDraft.openingBalance) || 0,
+                          });
+                          setEditingId(null);
+                          toast.success("Bank account updated.");
+                        }}
+                      >
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
                 <TableRow key={a.id}>
                   <TableCell className="font-medium">{a.bankName}</TableCell>
                   <TableCell>{a.nickname}</TableCell>
@@ -524,75 +1183,157 @@ function MasterData() {
                     {formatMoney(store.balanceOf("bank", a.id))}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => store.saveBankAccount({ ...a, active: !a.active })}
-                    >
-                      {a.active ? "Deactivate" : "Activate"}
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditingId(a.id);
+                          setEditDraft({
+                            bankName: a.bankName,
+                            nickname: a.nickname,
+                            openingBalance: String(a.openingBalance),
+                          });
+                        }}
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => store.saveBankAccount({ ...a, active: !a.active })}
+                      >
+                        {a.active ? "Deactivate" : "Activate"}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              ),
+            )}
+          </TableBody>
+        </Table>
+      </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-5">
+        <TextField
+          label="Bank name"
+          value={bank.bankName}
+          onChange={(v) => setBank({ ...bank, bankName: v })}
+        />
+        <TextField
+          label="Nickname"
+          value={bank.nickname}
+          onChange={(v) => setBank({ ...bank, nickname: v })}
+        />
+        <TextField
+          label="Last 4"
+          value={bank.last4}
+          onChange={(v) => setBank({ ...bank, last4: v })}
+        />
+        <TextField
+          label="Opening balance"
+          value={bank.openingBalance}
+          onChange={(v) => setBank({ ...bank, openingBalance: v })}
+        />
+        <div className="flex items-end">
+          <Button
+            className="w-full"
+            disabled={!bank.bankName.trim()}
+            onClick={() => {
+              store.saveBankAccount({
+                bankName: bank.bankName.trim(),
+                nickname: bank.nickname.trim() || bank.bankName.trim(),
+                last4: bank.last4.trim() || "0000",
+                openingBalance: Number(bank.openingBalance) || 0,
+                active: true,
+              });
+              setBank({ bankName: "", nickname: "", last4: "", openingBalance: "" });
+              toast.success("Bank account added.");
+            }}
+          >
+            <Plus className="size-4" /> Add account
+          </Button>
         </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-5">
-          <TextField
-            label="Bank name"
-            value={bank.bankName}
-            onChange={(v) => setBank({ ...bank, bankName: v })}
-          />
-          <TextField
-            label="Nickname"
-            value={bank.nickname}
-            onChange={(v) => setBank({ ...bank, nickname: v })}
-          />
-          <TextField
-            label="Last 4"
-            value={bank.last4}
-            onChange={(v) => setBank({ ...bank, last4: v })}
-          />
-          <TextField
-            label="Opening balance"
-            value={bank.openingBalance}
-            onChange={(v) => setBank({ ...bank, openingBalance: v })}
-          />
-          <div className="flex items-end">
-            <Button
-              className="w-full"
-              disabled={!bank.bankName.trim()}
-              onClick={() => {
-                store.saveBankAccount({
-                  bankName: bank.bankName.trim(),
-                  nickname: bank.nickname.trim() || bank.bankName.trim(),
-                  last4: bank.last4.trim() || "0000",
-                  openingBalance: Number(bank.openingBalance) || 0,
-                  active: true,
-                });
-                setBank({ bankName: "", nickname: "", last4: "", openingBalance: "" });
-                toast.success("Bank account added.");
-              }}
-            >
-              <Plus className="size-4" /> Add account
-            </Button>
-          </div>
-        </div>
-      </SectionCard>
+      </div>
+    </SectionCard>
+  );
+}
 
-      <SectionCard title="Cash books">
-        <div className="overflow-x-auto">
-          <Table className="min-w-[480px]">
-            <TableHeader>
-              <TableRow className="bg-muted/60">
-                <TableHead>Location</TableHead>
-                <TableHead className="text-right">Opening</TableHead>
-                <TableHead className="text-right">Current</TableHead>
-                <TableHead className="text-right">Active</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {store.cashLocations.map((l) => (
+function CashBooksPanel() {
+  const store = useLepdo();
+  const [search, setSearch] = useState("");
+  const [cash, setCash] = useState({ name: "", openingBalance: "" });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editDraft, setEditDraft] = useState({ name: "", openingBalance: "" });
+
+  const filtered = store.cashLocations.filter((l) =>
+    l.name.toLowerCase().includes(search.trim().toLowerCase()),
+  );
+
+  return (
+    <SectionCard title="Cash books">
+      <Input
+        placeholder="Search cash books…"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        className="mb-3 h-9 text-sm"
+      />
+      <div className="overflow-x-auto">
+        <Table className="min-w-[520px]">
+          <TableHeader>
+            <TableRow className="bg-muted/60">
+              <TableHead>Location</TableHead>
+              <TableHead className="text-right">Opening</TableHead>
+              <TableHead className="text-right">Current</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {filtered.map((l) =>
+              editingId === l.id ? (
+                <TableRow key={l.id}>
+                  <TableCell>
+                    <Input
+                      value={editDraft.name}
+                      onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })}
+                      className="h-8 text-sm"
+                    />
+                  </TableCell>
+                  <TableCell>
+                    <Input
+                      value={editDraft.openingBalance}
+                      onChange={(e) =>
+                        setEditDraft({ ...editDraft, openingBalance: e.target.value })
+                      }
+                      className="h-8 text-right text-sm"
+                    />
+                  </TableCell>
+                  <TableCell className="num text-right font-semibold">
+                    {formatMoney(store.balanceOf("cash", l.id))}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          store.saveCashLocation({
+                            ...l,
+                            name: editDraft.name.trim() || l.name,
+                            openingBalance: Number(editDraft.openingBalance) || 0,
+                          });
+                          setEditingId(null);
+                          toast.success("Cash book updated.");
+                        }}
+                      >
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" onClick={() => setEditingId(null)}>
+                        Cancel
+                      </Button>
+                    </div>
+                  </TableCell>
+                </TableRow>
+              ) : (
                 <TableRow key={l.id}>
                   <TableCell className="font-medium">{l.name}</TableCell>
                   <TableCell className="num text-right">{formatMoney(l.openingBalance)}</TableCell>
@@ -600,148 +1341,118 @@ function MasterData() {
                     {formatMoney(store.balanceOf("cash", l.id))}
                   </TableCell>
                   <TableCell className="text-right">
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => store.saveCashLocation({ ...l, active: !l.active })}
-                    >
-                      {l.active ? "Deactivate" : "Activate"}
-                    </Button>
+                    <div className="flex justify-end gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => {
+                          setEditingId(l.id);
+                          setEditDraft({ name: l.name, openingBalance: String(l.openingBalance) });
+                        }}
+                      >
+                        <Pencil className="size-3.5" />
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => store.saveCashLocation({ ...l, active: !l.active })}
+                      >
+                        {l.active ? "Deactivate" : "Activate"}
+                      </Button>
+                    </div>
                   </TableCell>
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <TextField
-            label="Location name"
-            value={cash.name}
-            onChange={(v) => setCash({ ...cash, name: v })}
-          />
-          <TextField
-            label="Opening balance"
-            value={cash.openingBalance}
-            onChange={(v) => setCash({ ...cash, openingBalance: v })}
-          />
-          <div className="flex items-end">
-            <Button
-              className="w-full"
-              disabled={!cash.name.trim()}
-              onClick={() => {
-                store.saveCashLocation({
-                  name: cash.name.trim(),
-                  openingBalance: Number(cash.openingBalance) || 0,
-                  active: true,
-                });
-                setCash({ name: "", openingBalance: "" });
-                toast.success("Cash book added.");
-              }}
-            >
-              <Plus className="size-4" /> Add cash book
-            </Button>
-          </div>
-        </div>
-      </SectionCard>
-
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        <SectionCard title="Customers & suppliers">
-          <div className="flex flex-wrap gap-2">
-            {store.parties.map((p) => (
-              <span
-                key={p.id}
-                className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-foreground"
-              >
-                {p.name} <span className="text-muted-foreground">· {p.type}</span>
-              </span>
-            ))}
-          </div>
-          <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-[1fr_auto]">
-            <TextField label="New party name" value={party} onChange={setParty} />
-            <div className="flex items-end">
-              <Button
-                disabled={!party.trim()}
-                onClick={() => {
-                  store.addParty(party.trim(), "other");
-                  setParty("");
-                  toast.success("Party added.");
-                }}
-              >
-                <Plus className="size-4" /> Add
-              </Button>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Sellers & brokers">
-          <p className="text-xs text-muted-foreground">
-            Managed from the Sales and Purchase forms — shown here for reference.
-          </p>
-          <div className="mt-2 space-y-2">
-            <div>
-              <p className="text-[11px] font-semibold text-muted-foreground">Sellers</p>
-              <div className="mt-1 flex flex-wrap gap-2">
-                {store.sellers.length ? (
-                  store.sellers.map((s) => (
-                    <Chip key={s.id} tone="blue">
-                      {s.name}
-                      {s.rate
-                        ? ` · ${s.rateType === "percent" ? `${s.rate}%` : formatMoney(s.rate)}`
-                        : ""}
-                    </Chip>
-                  ))
-                ) : (
-                  <span className="text-xs text-muted-foreground">None yet</span>
-                )}
-              </div>
-            </div>
-            <div>
-              <p className="text-[11px] font-semibold text-muted-foreground">Brokers</p>
-              <div className="mt-1 flex flex-wrap gap-2">
-                {store.brokers.length ? (
-                  store.brokers.map((s) => (
-                    <Chip key={s.id} tone="orange">
-                      {s.name}
-                      {s.rate
-                        ? ` · ${s.rateType === "percent" ? `${s.rate}%` : formatMoney(s.rate)}`
-                        : ""}
-                    </Chip>
-                  ))
-                ) : (
-                  <span className="text-xs text-muted-foreground">None yet</span>
-                )}
-              </div>
-            </div>
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Platforms">
-          {platforms.length ? (
-            <div className="flex flex-wrap gap-2">
-              {platforms.map((p) => (
-                <Chip key={p} tone="purple">
-                  {p}
-                </Chip>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="No platforms used yet" hint="Platforms come from sales invoices." />
-          )}
-        </SectionCard>
-
-        <SectionCard title="Expense categories">
-          <div className="flex flex-wrap gap-2">
-            {EXPENSE_CATEGORIES.map((c) => (
-              <Chip key={c.label} tone="yellow">
-                {c.label}
-              </Chip>
-            ))}
-          </div>
-        </SectionCard>
+              ),
+            )}
+          </TableBody>
+        </Table>
       </div>
-    </div>
+      <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-3">
+        <TextField
+          label="Location name"
+          value={cash.name}
+          onChange={(v) => setCash({ ...cash, name: v })}
+        />
+        <TextField
+          label="Opening balance"
+          value={cash.openingBalance}
+          onChange={(v) => setCash({ ...cash, openingBalance: v })}
+        />
+        <div className="flex items-end">
+          <Button
+            className="w-full"
+            disabled={!cash.name.trim()}
+            onClick={() => {
+              store.saveCashLocation({
+                name: cash.name.trim(),
+                openingBalance: Number(cash.openingBalance) || 0,
+                active: true,
+              });
+              setCash({ name: "", openingBalance: "" });
+              toast.success("Cash book added.");
+            }}
+          >
+            <Plus className="size-4" /> Add cash book
+          </Button>
+        </div>
+      </div>
+    </SectionCard>
   );
 }
+
+/* ================= Users & Security ================= */
+
+const BACKUPS_KEY = "lepdo.backups";
+const RESTORES_KEY = "lepdo.restores";
+const MAX_BACKUPS = 7;
+
+interface BackupEntry {
+  id: string;
+  at: string;
+  data: unknown;
+}
+
+interface RestoreEntry {
+  at: string;
+  file: string;
+  user: string;
+}
+
+function loadBackups(): BackupEntry[] {
+  try {
+    const raw = window.localStorage.getItem(BACKUPS_KEY);
+    return raw ? (JSON.parse(raw) as BackupEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveBackups(list: BackupEntry[]) {
+  try {
+    window.localStorage.setItem(BACKUPS_KEY, JSON.stringify(list.slice(0, MAX_BACKUPS)));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+function loadRestores(): RestoreEntry[] {
+  try {
+    const raw = window.localStorage.getItem(RESTORES_KEY);
+    return raw ? (JSON.parse(raw) as RestoreEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRestores(list: RestoreEntry[]) {
+  try {
+    window.localStorage.setItem(RESTORES_KEY, JSON.stringify(list));
+  } catch {
+    /* storage unavailable */
+  }
+}
+
+const IDLE_SESSION_KEY = "lepdo.session.active";
 
 function Security({
   draft,
@@ -752,17 +1463,127 @@ function Security({
 }) {
   const store = useLepdo();
   const [restoreOpen, setRestoreOpen] = useState(false);
+  const [resetOpen, setResetOpen] = useState(false);
+  const [userModal, setUserModal] = useState<AppUser | null>(null);
+  const [permModal, setPermModal] = useState<AppUser | null>(null);
+  const [pwdModal, setPwdModal] = useState<AppUser | null>(null);
+  const [backups, setBackups] = useState<BackupEntry[]>(() => loadBackups());
+  const [restores, setRestores] = useState<RestoreEntry[]>(() => loadRestores());
+  const [restoreFile, setRestoreFile] = useState<{ name: string; data: unknown } | null>(null);
+  const [auditSearch, setAuditSearch] = useState("");
+  const [auditSection, setAuditSection] = useState("all");
 
-  const backup = () => {
-    const blob = new Blob([JSON.stringify(store, replacer, 2)], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = `lepdo-backup-${new Date().toISOString().slice(0, 10)}.json`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-    toast.success("Backup downloaded.");
+  const users = draft.security.users ?? [];
+
+  const upsertUser = (user: AppUser) => {
+    const exists = users.some((u) => u.id === user.id);
+    const nextUsers = exists ? users.map((u) => (u.id === user.id ? user : u)) : [...users, user];
+    patch("security", { users: nextUsers });
   };
+
+  const snapshotData = () => JSON.parse(JSON.stringify(store, replacer)) as unknown;
+
+  const runBackup = (auto: boolean) => {
+    const entry: BackupEntry = { id: uid("bkp"), at: new Date().toISOString(), data: snapshotData() };
+    const next = [entry, ...backups].slice(0, MAX_BACKUPS);
+    setBackups(next);
+    saveBackups(next);
+    if (!auto) {
+      const blob = new Blob([JSON.stringify(entry.data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `lepdo-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      toast.success("Backup created and downloaded.");
+    }
+    return entry;
+  };
+
+  const backup = () => runBackup(false);
+
+  // Automatic daily backup — runs once per app load if the newest backup is stale.
+  useEffect(() => {
+    const latest = backups[0];
+    const stale = !latest || Date.now() - new Date(latest.at).getTime() > 24 * 60 * 60 * 1000;
+    if (stale) runBackup(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const handleRestoreFile = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const parsed = JSON.parse(String(reader.result ?? "{}"));
+        setRestoreFile({ name: file.name, data: parsed });
+        setRestoreOpen(true);
+      } catch {
+        toast.error("That file isn't valid backup JSON.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const confirmRestore = () => {
+    if (!restoreFile) return;
+    try {
+      window.localStorage.setItem("lepdo.accounting.v2", JSON.stringify(restoreFile.data));
+      const entry: RestoreEntry = {
+        at: new Date().toISOString(),
+        file: restoreFile.name,
+        user: draft.security.role || "Owner",
+      };
+      const nextRestores = [entry, ...restores];
+      setRestores(nextRestores);
+      saveRestores(nextRestores);
+      toast.success("Data restored. Reloading…");
+      setRestoreOpen(false);
+      setRestoreFile(null);
+      setTimeout(() => window.location.reload(), 600);
+    } catch {
+      toast.error("Restore failed — storage unavailable.");
+    }
+  };
+
+  // Idle-timeout auto logout.
+  useEffect(() => {
+    const minutes = draft.security.idleTimeoutMinutes ?? 0;
+    if (!minutes || minutes <= 0) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        try {
+          window.sessionStorage.removeItem(IDLE_SESSION_KEY);
+        } catch {
+          /* ignore */
+        }
+        toast.message("Signed out after inactivity.");
+      }, minutes * 60 * 1000);
+    };
+    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
+    events.forEach((ev) => window.addEventListener(ev, reset));
+    reset();
+    return () => {
+      clearTimeout(timer);
+      events.forEach((ev) => window.removeEventListener(ev, reset));
+    };
+  }, [draft.security.idleTimeoutMinutes]);
+
+  const auditEntity = (e: string) => e.split(":")[0] ?? e;
+  const sections = Array.from(new Set(store.auditLogs.map((l) => auditEntity(l.entity)))).sort();
+  const filteredAudit = store.auditLogs.filter((l) => {
+    if (auditSection !== "all" && auditEntity(l.entity) !== auditSection) return false;
+    const q = auditSearch.trim().toLowerCase();
+    if (!q) return true;
+    return (
+      l.action.toLowerCase().includes(q) ||
+      l.entity.toLowerCase().includes(q) ||
+      l.detail.toLowerCase().includes(q) ||
+      l.by.toLowerCase().includes(q)
+    );
+  });
 
   return (
     <div className="space-y-4">
@@ -803,15 +1624,163 @@ function Security({
           <Field label="Password">
             <Input type="password" placeholder="••••••••" className="h-9 text-sm" />
           </Field>
+          <Field label="Auto-logout after inactivity (minutes)">
+            <NumInput
+              className="h-9"
+              decimals={0}
+              placeholder="0 = disabled"
+              value={draft.security.idleTimeoutMinutes ?? 0}
+              onChange={(v) => patch("security", { idleTimeoutMinutes: v })}
+            />
+          </Field>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-2">
+          <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
+            Reset to starting dataset
+          </Button>
+        </div>
+      </SectionCard>
+
+      <SectionCard title="Backup & Restore">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <StatCard
+            label="Last backup"
+            value={backups[0] ? formatDateTime(backups[0].at) : "Never"}
+            tone={backups[0] ? "green" : "orange"}
+          />
+          <StatCard label="Backups kept" value={String(backups.length)} tone="blue" />
+          <StatCard label="Restores logged" value={String(restores.length)} tone="purple" />
+          <StatCard
+            label="Status"
+            value={
+              backups[0] && Date.now() - new Date(backups[0].at).getTime() < 24 * 60 * 60 * 1000
+                ? "Up to date"
+                : "Due"
+            }
+            tone="navy"
+          />
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
           <Button variant="outline" size="sm" onClick={backup}>
-            Download backup
+            <Download className="size-3.5" /> Backup now
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setRestoreOpen(true)}>
-            Restore / reset
-          </Button>
+          <label className="inline-flex h-9 cursor-pointer items-center gap-1.5 rounded-md border border-input bg-background px-3 text-xs font-medium hover:bg-muted/60">
+            <Upload className="size-3.5" /> Restore from file
+            <input
+              type="file"
+              accept="application/json"
+              className="hidden"
+              onChange={(e) => {
+                const file = e.target.files?.[0];
+                if (file) handleRestoreFile(file);
+                e.target.value = "";
+              }}
+            />
+          </label>
         </div>
+        <p className="mt-2 flex items-center gap-1.5 text-[11px] text-muted-foreground">
+          <ShieldAlert className="size-3.5" /> An automatic daily backup is taken on app load when
+          the newest backup is older than 24 hours. The 7 most recent backups are kept.
+        </p>
+        {restores.length > 0 ? (
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-semibold text-foreground">Restore history</p>
+            <div className="overflow-x-auto">
+              <Table className="min-w-[480px]">
+                <TableHeader>
+                  <TableRow className="bg-muted/60">
+                    <TableHead>When</TableHead>
+                    <TableHead>Source file</TableHead>
+                    <TableHead>User</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {restores.map((r, i) => (
+                    <TableRow key={`${r.at}-${i}`}>
+                      <TableCell className="text-xs">{formatDateTime(r.at)}</TableCell>
+                      <TableCell className="text-xs">{r.file}</TableCell>
+                      <TableCell className="text-xs">{r.user}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        ) : null}
+      </SectionCard>
+
+      <SectionCard
+        title="Users"
+        actions={
+          <Button
+            size="sm"
+            onClick={() =>
+              setUserModal({
+                id: uid("user"),
+                name: "",
+                username: "",
+                role: "Staff",
+                active: true,
+                passwordSet: false,
+                permissions: defaultPermissions(),
+              })
+            }
+          >
+            <Plus className="size-4" /> Add user
+          </Button>
+        }
+      >
+        {users.length === 0 ? (
+          <EmptyState title="No users added yet" hint="Add a user to grant page-wise access." />
+        ) : (
+          <div className="overflow-x-auto">
+            <Table className="min-w-[560px]">
+              <TableHeader>
+                <TableRow className="bg-muted/60">
+                  <TableHead>Name</TableHead>
+                  <TableHead>Username</TableHead>
+                  <TableHead>Role</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead className="text-right">Actions</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {users.map((u) => (
+                  <TableRow key={u.id}>
+                    <TableCell className="font-medium">{u.name}</TableCell>
+                    <TableCell>{u.username}</TableCell>
+                    <TableCell>{u.role}</TableCell>
+                    <TableCell>
+                      <span className={cn("text-xs", u.active ? "text-sl-paid" : "text-muted-foreground")}>
+                        {u.active ? "Active" : "Inactive"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right">
+                      <div className="flex flex-wrap justify-end gap-1">
+                        <Button size="sm" variant="ghost" onClick={() => setUserModal(u)}>
+                          <Pencil className="size-3.5" /> Edit
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setPermModal(u)}>
+                          Permissions
+                        </Button>
+                        <Button size="sm" variant="ghost" onClick={() => setPwdModal(u)}>
+                          Password
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => upsertUser({ ...u, active: !u.active })}
+                        >
+                          {u.active ? "Deactivate" : "Activate"}
+                        </Button>
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
       </SectionCard>
 
       <SectionCard
@@ -823,49 +1792,87 @@ function Security({
               title: "Audit Log",
               subtitle: "All create, edit, void and restore activity",
               columns: [
-                { key: "at", label: "When" },
+                { key: "date", label: "Date" },
+                { key: "time", label: "Time" },
+                { key: "by", label: "User" },
+                { key: "entity", label: "Section" },
+                { key: "detail", label: "Record" },
                 { key: "action", label: "Action" },
-                { key: "entity", label: "Entity" },
-                { key: "detail", label: "Detail" },
-                { key: "by", label: "By" },
               ],
-              rows: store.auditLogs.map((l) => ({
-                at: formatDateTime(l.at),
-                action: l.action,
-                entity: l.entity,
-                detail: l.detail,
-                by: l.by,
-              })),
+              rows: filteredAudit.map((l) => {
+                const [date, time] = formatDateTime(l.at).split(" ", 2);
+                return {
+                  date: date ?? "",
+                  time: formatDateTime(l.at).slice(date?.length ?? 0).trim(),
+                  by: l.by,
+                  entity: l.entity,
+                  detail: l.detail,
+                  action: l.action,
+                };
+              }),
             })}
           />
         }
       >
-        {store.auditLogs.length === 0 ? (
-          <EmptyState title="No activity yet" />
+        <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-[1fr_220px]">
+          <Input
+            placeholder="Search action, entity, detail or user…"
+            value={auditSearch}
+            onChange={(e) => setAuditSearch(e.target.value)}
+            className="h-9 text-sm"
+          />
+          <select
+            value={auditSection}
+            onChange={(e) => setAuditSection(e.target.value)}
+            className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+          >
+            <option value="all">All sections</option>
+            {sections.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
+        </div>
+        {filteredAudit.length === 0 ? (
+          <EmptyState title="No matching activity" />
         ) : (
           <div className="overflow-x-auto">
-            <Table className="min-w-[640px]">
+            <Table className="min-w-[820px]">
               <TableHeader>
                 <TableRow className="bg-muted/60">
-                  <TableHead>When</TableHead>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Time</TableHead>
+                  <TableHead>User</TableHead>
+                  <TableHead>Section</TableHead>
+                  <TableHead>Record</TableHead>
+                  <TableHead>Previous value</TableHead>
+                  <TableHead>New value</TableHead>
                   <TableHead>Action</TableHead>
-                  <TableHead>Entity</TableHead>
-                  <TableHead>Detail</TableHead>
-                  <TableHead>By</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {store.auditLogs.slice(0, 50).map((log) => (
-                  <TableRow key={log.id}>
-                    <TableCell className="whitespace-nowrap text-xs">
-                      {formatDateTime(log.at)}
-                    </TableCell>
-                    <TableCell className="text-xs font-medium">{log.action}</TableCell>
-                    <TableCell className="text-xs">{log.entity}</TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{log.detail}</TableCell>
-                    <TableCell className="text-xs">{log.by}</TableCell>
-                  </TableRow>
-                ))}
+                {filteredAudit.slice(0, 100).map((log) => {
+                  const full = formatDateTime(log.at);
+                  const [datePart, ...rest] = full.split(" ");
+                  const timePart = rest.join(" ");
+                  const change = /^(.*?) — (.+?) → (.+)$/.exec(log.detail);
+                  const record = change ? change[1] : log.detail;
+                  const prev = change ? change[2] : undefined;
+                  const next = change ? change[3] : undefined;
+                  return (
+                    <TableRow key={log.id}>
+                      <TableCell className="whitespace-nowrap text-xs">{datePart}</TableCell>
+                      <TableCell className="whitespace-nowrap text-xs">{timePart}</TableCell>
+                      <TableCell className="text-xs">{log.by}</TableCell>
+                      <TableCell className="text-xs">{log.entity}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{record}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{prev ?? "—"}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{next ?? "—"}</TableCell>
+                      <TableCell className="text-xs font-medium">{log.action}</TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </div>
@@ -873,13 +1880,13 @@ function Security({
       </SectionCard>
 
       <ModalShell
-        open={restoreOpen}
-        onClose={() => setRestoreOpen(false)}
-        title="Restore or reset data"
+        open={resetOpen}
+        onClose={() => setResetOpen(false)}
+        title="Reset to starting dataset"
         width="max-w-[460px]"
         footer={
           <>
-            <Button variant="outline" size="sm" onClick={() => setRestoreOpen(false)}>
+            <Button variant="outline" size="sm" onClick={() => setResetOpen(false)}>
               Cancel
             </Button>
             <Button
@@ -887,7 +1894,7 @@ function Security({
               size="sm"
               onClick={() => {
                 store.resetDemoData();
-                setRestoreOpen(false);
+                setResetOpen(false);
                 toast.success("Data reset to the starting dataset.");
               }}
             >
@@ -900,6 +1907,192 @@ function Security({
           Download a backup first. Resetting replaces the working dataset with the starting data and
           cannot be undone.
         </p>
+      </ModalShell>
+
+      <ModalShell
+        open={restoreOpen}
+        onClose={() => {
+          setRestoreOpen(false);
+          setRestoreFile(null);
+        }}
+        title="Restore from backup?"
+        subtitle={restoreFile?.name}
+        width="max-w-[460px]"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setRestoreOpen(false);
+                setRestoreFile(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={confirmRestore}>
+              Confirm & restore
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          This replaces all current business data with the contents of the uploaded backup file. The
+          app will reload after restoring. This action cannot be undone — download a fresh backup
+          first if unsure.
+        </p>
+      </ModalShell>
+
+      <ModalShell
+        open={!!userModal}
+        onClose={() => setUserModal(null)}
+        title={userModal && users.some((u) => u.id === userModal.id) ? "Edit user" : "Add user"}
+        width="max-w-[460px]"
+        footer={
+          userModal ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setUserModal(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                disabled={!userModal.name.trim() || !userModal.username.trim()}
+                onClick={() => {
+                  upsertUser(userModal);
+                  setUserModal(null);
+                  toast.success("User saved.");
+                }}
+              >
+                Save
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {userModal ? (
+          <div className="grid grid-cols-1 gap-3">
+            <TextField
+              label="Name"
+              value={userModal.name}
+              onChange={(v) => setUserModal({ ...userModal, name: v })}
+            />
+            <TextField
+              label="Username"
+              value={userModal.username}
+              onChange={(v) => setUserModal({ ...userModal, username: v })}
+            />
+            <TextField
+              label="Role"
+              value={userModal.role}
+              onChange={(v) => setUserModal({ ...userModal, role: v })}
+            />
+          </div>
+        ) : null}
+      </ModalShell>
+
+      <ModalShell
+        open={!!permModal}
+        onClose={() => setPermModal(null)}
+        title={`Permissions — ${permModal?.name ?? ""}`}
+        width="max-w-[820px]"
+        footer={
+          permModal ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setPermModal(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  upsertUser(permModal);
+                  setPermModal(null);
+                  toast.success("Permissions saved.");
+                }}
+              >
+                Save
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {permModal ? (
+          <div className="overflow-x-auto">
+            <Table className="min-w-[640px]">
+              <TableHeader>
+                <TableRow className="bg-muted/60">
+                  <TableHead>Page</TableHead>
+                  {PERMISSION_KEYS.map((k) => (
+                    <TableHead key={k} className="text-center capitalize">
+                      {k}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {permModal.permissions.map((perm) => (
+                  <TableRow key={perm.page}>
+                    <TableCell className="text-xs font-medium">{perm.page}</TableCell>
+                    {PERMISSION_KEYS.map((k) => (
+                      <TableCell key={k} className="text-center">
+                        <input
+                          type="checkbox"
+                          checked={perm[k]}
+                          onChange={(e) =>
+                            setPermModal({
+                              ...permModal,
+                              permissions: permModal.permissions.map((p) =>
+                                p.page === perm.page ? { ...p, [k]: e.target.checked } : p,
+                              ),
+                            })
+                          }
+                          className="size-4 cursor-pointer"
+                        />
+                      </TableCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        ) : null}
+      </ModalShell>
+
+      <ModalShell
+        open={!!pwdModal}
+        onClose={() => setPwdModal(null)}
+        title={`Change password — ${pwdModal?.name ?? ""}`}
+        width="max-w-[420px]"
+        footer={
+          pwdModal ? (
+            <>
+              <Button variant="outline" size="sm" onClick={() => setPwdModal(null)}>
+                Cancel
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  upsertUser({ ...pwdModal, passwordSet: true });
+                  setPwdModal(null);
+                  toast.success("Password updated.");
+                }}
+              >
+                Set password
+              </Button>
+            </>
+          ) : null
+        }
+      >
+        {pwdModal ? (
+          <div className="space-y-2">
+            <Field label="New password">
+              <Input type="password" placeholder="••••••••" className="h-9 text-sm" />
+            </Field>
+            <p className="text-[11px] text-muted-foreground">
+              Passwords are never stored or displayed in plain text — only a "password set" marker
+              is saved.
+            </p>
+          </div>
+        ) : null}
       </ModalShell>
     </div>
   );

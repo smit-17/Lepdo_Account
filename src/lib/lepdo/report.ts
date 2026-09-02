@@ -20,7 +20,16 @@ export interface ReportMeta {
   closing: number;
 }
 
-const HEADERS = ["Date", "Bank", "Category", "Particulars", "Reference/UTR", "Credit", "Debit", "Balance"];
+const HEADERS = [
+  "Date",
+  "Bank",
+  "Category",
+  "Particulars",
+  "Reference/UTR",
+  "Credit",
+  "Debit",
+  "Balance",
+];
 
 function fileStamp(): string {
   return new Date().toISOString().slice(0, 10);
@@ -38,8 +47,7 @@ function download(content: BlobPart, filename: string, mime: string) {
 }
 
 const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
-const html = (v: string) =>
-  v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const html = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
 const n2 = (n: number) => (n ? n.toFixed(2) : "");
 
@@ -69,7 +77,11 @@ export function downloadCsv(rows: ReportRow[], meta: ReportMeta) {
     `${esc("Closing Balance")},${meta.closing.toFixed(2)}`,
     `${esc("Report generated")},${esc(formatDateTime(new Date().toISOString()))}`,
   ];
-  download(`\uFEFF${lines.join("\r\n")}`, `LEPDO-Bank-Ledger-${fileStamp()}.csv`, "text/csv;charset=utf-8");
+  download(
+    `\uFEFF${lines.join("\r\n")}`,
+    `LEPDO-Bank-Ledger-${fileStamp()}.csv`,
+    "text/csv;charset=utf-8",
+  );
 }
 
 function tableHtml(rows: ReportRow[], meta: ReportMeta): string {

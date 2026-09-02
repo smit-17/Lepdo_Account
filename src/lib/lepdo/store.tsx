@@ -12,6 +12,9 @@ import { buildSeed } from "./seed";
 import { round2, uid } from "./format";
 import { categoryMap } from "./constants";
 import { DEFAULT_SETTINGS } from "./extras";
+import { mergeMasters } from "./masters";
+import { isLedgerEntry } from "./entry";
+
 import type {
   Allocation,
   AppSettings,
@@ -19,6 +22,7 @@ import type {
   BankAccount,
   CashLocation,
   Contact,
+  EntryChange,
   Invoice,
   LepdoData,
   Party,
@@ -47,18 +51,33 @@ export interface NewEntryInput {
   drawingCategory?: string | undefined;
   expenseCategory?: string | undefined;
   expensePaid?: boolean | undefined;
+  /** true for entries recorded through Bank Entry / Cash Entry */
+  ledger?: boolean | undefined;
   /** destination for transfer categories */
   destinationType?: SourceType | undefined;
   destinationId?: string | undefined;
 }
 
-export interface SalesInvoiceInput {
+/** Fields shared by sales invoices and purchase bills (all optional). */
+export interface InvoiceExtraInput {
+  dueDays?: number | undefined;
+  discountMode?: Invoice["discountMode"];
+  discountValue?: number | undefined;
+  supplyLocation?: Invoice["supplyLocation"];
+  cgstAmount?: number | undefined;
+  sgstAmount?: number | undefined;
+  igstAmount?: number | undefined;
+}
+
+export interface SalesInvoiceInput extends InvoiceExtraInput {
   id?: string | undefined;
   number: string;
   partyId: string;
   date: string;
+  /** empty string = no due date */
   dueDate: string;
   sellerName?: string | undefined;
+  sellerIncentivePercent?: number | undefined;
   platform?: string | undefined;
   invoiceKind?: Invoice["invoiceKind"];
   jewelryItems?: Invoice["jewelryItems"];
@@ -79,23 +98,30 @@ export interface SalesInvoiceInput {
   notes?: string | undefined;
 }
 
-export interface PurchaseBillInput {
+export interface PurchaseBillInput extends InvoiceExtraInput {
   id?: string | undefined;
   number: string;
   partyId: string;
   date: string;
+  /** empty string = no due date */
   dueDate: string;
   paymentTermsDays?: number | undefined;
   brokerName?: string | undefined;
   supplierInvoiceNumber?: string | undefined;
   billKind: NonNullable<Invoice["billKind"]>;
   usdRate?: number | undefined;
+  purchaseType?: Invoice["purchaseType"];
+  gstRate?: number | undefined;
   lines?: Invoice["lines"];
   makingLines?: Invoice["makingLines"];
   subtotal: number;
+  discount?: number | undefined;
+  taxableAmount?: number | undefined;
+  taxAmount?: number | undefined;
   total: number;
   notes?: string | undefined;
 }
+
 
 export interface CustomerInput {
   id?: string | undefined;
@@ -128,7 +154,10 @@ export type ExtraKey =
   | "stockEntries"
   | "teamMembers"
   | "teamPayments"
-  | "goals";
+  | "goals"
+  | "emiPlans"
+  | "emiPayments";
+
 
 export interface AuditFields {
   id: string;
@@ -141,10 +170,15 @@ export interface AuditFields {
 interface StoreValue extends LepdoData {
   ready: boolean;
   addEntry: (input: NewEntryInput) => { ok: boolean; message: string };
-  updateEntry: (id: string, input: NewEntryInput) => { ok: boolean; message: string };
-  voidEntry: (id: string) => void;
+  updateEntry: (
+    id: string,
+    input: NewEntryInput,
+    reason?: string,
+  ) => { ok: boolean; message: string };
+  voidEntry: (id: string, reason?: string) => void;
   restoreEntry: (id: string) => void;
   toggleReconciled: (id: string) => void;
+
   duplicateEntry: (id: string) => void;
   addParty: (name: string, type: Party["type"]) => Party;
   ensureParties: (list: Party[]) => void;
@@ -172,7 +206,17 @@ interface StoreValue extends LepdoData {
   setRecordVoided: (key: ExtraKey, id: string, voided: boolean) => void;
   removeRecord: (key: ExtraKey, id: string) => void;
   saveSettings: (patch: Partial<AppSettings>) => void;
-  stamp: <T extends object>(prefix: string, item: T & { id?: string | undefined }) => T & AuditFields;
+  /** add or rename a master value (Settings › Master Data) */
+  saveMaster: (masterId: string, value: { id?: string; name: string; active?: boolean }) => void;
+  /** deactivate / reactivate a master value without touching history */
+  setMasterActive: (masterId: string, id: string, active: boolean) => void;
+  /** delete a master value — blocked when the value is used historically */
+  removeMaster: (masterId: string, id: string) => { ok: boolean; message: string };
+
+  stamp: <T extends object>(
+    prefix: string,
+    item: T & { id?: string | undefined },
+  ) => T & AuditFields;
 }
 
 // Keep the context identity stable across HMR updates so the provider and
@@ -198,6 +242,10 @@ function load(): LepdoData {
       teamMembers: parsed.teamMembers ?? [],
       teamPayments: parsed.teamPayments ?? [],
       goals: parsed.goals ?? [],
+      emiPlans: parsed.emiPlans ?? [],
+      emiPayments: parsed.emiPayments ?? [],
+      masters: mergeMasters(parsed.masters),
+
       settings: {
         ...DEFAULT_SETTINGS,
         ...(parsed.settings ?? {}),
@@ -298,6 +346,15 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       drawingCategory: input.drawingCategory,
       expenseCategory: input.expenseCategory,
       expensePaid: input.expensePaid,
+      ledger: input.ledger,
+      history: [
+        {
+          at: now,
+          by: USER,
+          action: "created",
+          detail: `entry created — ₹${round2(input.amount)}`,
+        },
+      ],
       reconciled: false,
       voided: false,
       createdAt: now,
@@ -326,28 +383,26 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
     return [base];
   }, []);
 
-  const validate = useCallback(
-    (input: NewEntryInput): string | null => {
-      if (!input.date) return "Date is required.";
-      const unpaidExpense = input.category === "expense" && input.expensePaid === false;
-      if (!input.accountId && !unpaidExpense) return "Account / location is required.";
-      if (!(input.amount > 0)) return "Amount must be greater than zero.";
-      if (!input.particulars.trim()) return "Particulars are required.";
-      if (!input.category) return "Please select a transaction category.";
-      const meta = categoryMap[input.category];
-      if (meta.isTransfer) {
-        if (!input.destinationId) return "Select a destination account or cash location.";
-        if (input.destinationId === input.accountId)
-          return "Source and destination cannot be the same.";
-      } else if (meta.needsAllocation && !input.partyId) {
-        return "Party / person is required.";
-      }
-      const allocated = round2((input.allocations ?? []).reduce((s, a) => s + a.amount, 0));
-      if (allocated > round2(input.amount)) return "Allocated amount cannot exceed the payment amount.";
-      return null;
-    },
-    [],
-  );
+  const validate = useCallback((input: NewEntryInput): string | null => {
+    if (!input.date) return "Date is required.";
+    const unpaidExpense = input.category === "expense" && input.expensePaid === false;
+    if (!input.accountId && !unpaidExpense) return "Account / location is required.";
+    if (!(input.amount > 0)) return "Amount must be greater than zero.";
+    if (!input.particulars.trim()) return "Particulars are required.";
+    if (!input.category) return "Please select a transaction category.";
+    const meta = categoryMap[input.category];
+    if (meta.isTransfer) {
+      if (!input.destinationId) return "Select a destination account or cash location.";
+      if (input.destinationId === input.accountId)
+        return "Source and destination cannot be the same.";
+    } else if (meta.needsAllocation && !input.partyId) {
+      return "Party / person is required.";
+    }
+    const allocated = round2((input.allocations ?? []).reduce((s, a) => s + a.amount, 0));
+    if (allocated > round2(input.amount))
+      return "Allocated amount cannot exceed the payment amount.";
+    return null;
+  }, []);
 
   const balanceOf = useCallback(
     (sourceType: SourceType, accountId: string) => {
@@ -356,7 +411,7 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           ? (data.bankAccounts.find((b) => b.id === accountId)?.openingBalance ?? 0)
           : (data.cashLocations.find((c) => c.id === accountId)?.openingBalance ?? 0);
       const delta = data.transactions
-        .filter((t) => !t.voided && t.accountId === accountId)
+        .filter((t) => !t.voided && isLedgerEntry(t) && t.accountId === accountId)
         .reduce((sum, t) => sum + (t.direction === "in" ? t.amount : -t.amount), 0);
       return round2(opening + delta);
     },
@@ -366,7 +421,7 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
   const lastUpdatedOf = useCallback(
     (accountId: string) => {
       const rows = data.transactions
-        .filter((t) => t.accountId === accountId && !t.voided)
+        .filter((t) => t.accountId === accountId && !t.voided && isLedgerEntry(t))
         .map((t) => t.updatedAt)
         .sort();
       return rows.length ? (rows[rows.length - 1] ?? null) : null;
@@ -427,7 +482,7 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
   );
 
   const updateEntry = useCallback<StoreValue["updateEntry"]>(
-    (id, input) => {
+    (id, input, reason) => {
       const error = validate(input);
       if (error) return { ok: false, message: error };
       setData((prev) => {
@@ -436,25 +491,69 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
         const kindOld = existing.category
           ? (categoryMap[existing.category].needsAllocation ?? null)
           : null;
-        const kindNew = input.category ? (categoryMap[input.category].needsAllocation ?? null) : null;
+        const kindNew = input.category
+          ? (categoryMap[input.category].needsAllocation ?? null)
+          : null;
         let next = applyAllocations(prev, existing.allocations, kindOld, -1);
         next = applyAllocations(next, input.allocations, kindNew, 1);
         const allocated = round2((input.allocations ?? []).reduce((s, a) => s + a.amount, 0));
+        const now = new Date().toISOString();
+        const changed = [
+          existing.date !== input.date ? `date ${existing.date} → ${input.date}` : null,
+          round2(existing.amount) !== round2(input.amount)
+            ? `amount ₹${round2(existing.amount)} → ₹${round2(input.amount)}`
+            : null,
+          existing.category !== input.category
+            ? `category ${existing.category ?? "—"} → ${input.category ?? "—"}`
+            : null,
+          existing.particulars.trim() !== input.particulars.trim() ? "particulars" : null,
+        ]
+          .filter(Boolean)
+          .join(", ");
+        const entry: EntryChange = {
+          at: now,
+          by: USER,
+          action: "edited",
+          detail: changed || "details updated",
+          reason,
+        };
+        // keep every linked transfer row in sync with the edited entry
+        const groupId = existing.transferGroupId;
         next = {
           ...next,
-          transactions: next.transactions.map((t) =>
-            t.id === id
-              ? {
-                  ...t,
-                  ...input,
-                  amount: round2(input.amount),
-                  particulars: input.particulars.trim(),
-                  advanceAmount: kindNew ? round2(input.amount - allocated) : undefined,
-                  updatedAt: new Date().toISOString(),
-                }
-              : t,
-          ),
-          auditLogs: [log("update", "transaction", `${existing.code} edited`), ...next.auditLogs],
+          transactions: next.transactions.map((t) => {
+            if (t.id === id)
+              return {
+                ...t,
+                ...input,
+                amount: round2(input.amount),
+                particulars: input.particulars.trim(),
+                advanceAmount: kindNew ? round2(input.amount - allocated) : undefined,
+                history: [...(t.history ?? []), entry],
+                updatedAt: now,
+              };
+            if (groupId && t.transferGroupId === groupId)
+              return {
+                ...t,
+                date: input.date,
+                amount: round2(input.amount),
+                category: input.category,
+                reference: input.reference?.trim() || t.reference,
+                notes: input.notes,
+                particulars: `${input.particulars.trim()} (transfer in)`,
+                history: [...(t.history ?? []), { ...entry, action: "linked-updated" }],
+                updatedAt: now,
+              };
+            return t;
+          }),
+          auditLogs: [
+            log(
+              "update",
+              "transaction",
+              `${existing.code} edited${changed ? ` — ${changed}` : ""}${reason ? ` · reason: ${reason}` : ""}`,
+            ),
+            ...next.auditLogs,
+          ],
         };
         return next;
       });
@@ -464,7 +563,7 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
   );
 
   const voidEntry = useCallback<StoreValue["voidEntry"]>(
-    (id) => {
+    (id, reason) => {
       setData((prev) => {
         const target = prev.transactions.find((t) => t.id === id);
         if (!target) return prev;
@@ -473,14 +572,34 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
               .filter((t) => t.transferGroupId === target.transferGroupId)
               .map((t) => t.id)
           : [id];
-        const kind = target.category ? (categoryMap[target.category].needsAllocation ?? null) : null;
+        const kind = target.category
+          ? (categoryMap[target.category].needsAllocation ?? null)
+          : null;
         let next = applyAllocations(prev, target.allocations, kind, -1);
+        const now = new Date().toISOString();
         next = {
           ...next,
           transactions: next.transactions.map((t) =>
-            ids.includes(t.id) ? { ...t, voided: true, updatedAt: new Date().toISOString() } : t,
+            ids.includes(t.id)
+              ? {
+                  ...t,
+                  voided: true,
+                  history: [
+                    ...(t.history ?? []),
+                    { at: now, by: USER, action: "voided", detail: "removed from books", reason },
+                  ],
+                  updatedAt: now,
+                }
+              : t,
           ),
-          auditLogs: [log("void", "transaction", `${target.code} voided`), ...next.auditLogs],
+          auditLogs: [
+            log(
+              "void",
+              "transaction",
+              `${target.code} voided${reason ? ` · reason: ${reason}` : ""}`,
+            ),
+            ...next.auditLogs,
+          ],
         };
         return next;
       });
@@ -498,7 +617,9 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
               .filter((t) => t.transferGroupId === target.transferGroupId)
               .map((t) => t.id)
           : [id];
-        const kind = target.category ? (categoryMap[target.category].needsAllocation ?? null) : null;
+        const kind = target.category
+          ? (categoryMap[target.category].needsAllocation ?? null)
+          : null;
         let next = applyAllocations(prev, target.allocations, kind, 1);
         next = {
           ...next,
@@ -518,7 +639,9 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       setData((prev) => ({
         ...prev,
         transactions: prev.transactions.map((t) =>
-          t.id === id ? { ...t, reconciled: !t.reconciled, updatedAt: new Date().toISOString() } : t,
+          t.id === id
+            ? { ...t, reconciled: !t.reconciled, updatedAt: new Date().toISOString() }
+            : t,
         ),
         auditLogs: [log("reconcile", "transaction", `${id} reconcile toggled`), ...prev.auditLogs],
       }));
@@ -546,7 +669,10 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
         return {
           ...prev,
           transactions: [...prev.transactions, copy],
-          auditLogs: [log("duplicate", "transaction", `${src.code} duplicated as ${copy.code}`), ...prev.auditLogs],
+          auditLogs: [
+            log("duplicate", "transaction", `${src.code} duplicated as ${copy.code}`),
+            ...prev.auditLogs,
+          ],
         };
       });
     },
@@ -639,12 +765,13 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       if (!number) return { ok: false, message: "Invoice number is required." };
       if (!input.partyId) return { ok: false, message: "Please select a customer." };
       if (!input.date) return { ok: false, message: "Invoice date is required." };
-      if (!input.dueDate) return { ok: false, message: "Due date is required." };
-      if (input.dueDate < input.date) return { ok: false, message: "Due date cannot be before the invoice date." };
-      const hasRows =
-        (input.lines ?? []).length > 0 || (input.jewelryItems ?? []).length > 0;
+      if (input.dueDate && input.dueDate < input.date)
+        return { ok: false, message: "Due date cannot be before the invoice date." };
+
+      const hasRows = (input.lines ?? []).length > 0 || (input.jewelryItems ?? []).length > 0;
       if (!hasRows) return { ok: false, message: "Add at least one item row." };
-      if (!(input.total > 0)) return { ok: false, message: "Invoice total must be greater than zero." };
+      if (!(input.total > 0))
+        return { ok: false, message: "Invoice total must be greater than zero." };
 
       const clash = data.salesInvoices.find(
         (i) =>
@@ -694,6 +821,15 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           taxAmount: round2(input.taxAmount),
           shipping: round2(input.shipping),
           roundOff: round2(input.roundOff),
+          dueDays: input.dueDays,
+          discountMode: input.discountMode,
+          discountValue: input.discountValue,
+          supplyLocation: input.supplyLocation,
+          cgstAmount: input.cgstAmount,
+          sgstAmount: input.sgstAmount,
+          igstAmount: input.igstAmount,
+          sellerIncentivePercent: input.sellerIncentivePercent,
+
           notes: input.notes,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
@@ -704,7 +840,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
             ? prev.salesInvoices.map((i) => (i.id === id ? invoice : i))
             : [...prev.salesInvoices, invoice],
           auditLogs: [
-            log(existing ? "update" : "create", "sales_invoice", `${number} — ₹${round2(input.total)}`),
+            log(
+              existing ? "update" : "create",
+              "sales_invoice",
+              `${number} — ₹${round2(input.total)}`,
+            ),
             ...prev.auditLogs,
           ],
         };
@@ -722,7 +862,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           i.id === id ? { ...i, voided: true, updatedAt: new Date().toISOString() } : i,
         ),
         auditLogs: [
-          log("void", "sales_invoice", `${prev.salesInvoices.find((i) => i.id === id)?.number ?? id} voided`),
+          log(
+            "void",
+            "sales_invoice",
+            `${prev.salesInvoices.find((i) => i.id === id)?.number ?? id} voided`,
+          ),
           ...prev.auditLogs,
         ],
       }));
@@ -738,7 +882,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           i.id === id ? { ...i, voided: false, updatedAt: new Date().toISOString() } : i,
         ),
         auditLogs: [
-          log("restore", "sales_invoice", `${prev.salesInvoices.find((i) => i.id === id)?.number ?? id} restored`),
+          log(
+            "restore",
+            "sales_invoice",
+            `${prev.salesInvoices.find((i) => i.id === id)?.number ?? id} restored`,
+          ),
           ...prev.auditLogs,
         ],
       }));
@@ -793,12 +941,13 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       if (!number) return { ok: false, message: "Bill number is required." };
       if (!input.partyId) return { ok: false, message: "Please select a supplier." };
       if (!input.date) return { ok: false, message: "Invoice date is required." };
-      if (!input.dueDate) return { ok: false, message: "Due date is required." };
-      if (input.dueDate < input.date)
+      if (input.dueDate && input.dueDate < input.date)
         return { ok: false, message: "Due date cannot be before the invoice date." };
+
       const hasRows = (input.lines ?? []).length > 0 || (input.makingLines ?? []).length > 0;
       if (!hasRows) return { ok: false, message: "Add at least one item row." };
-      if (!(input.total > 0)) return { ok: false, message: "Bill total must be greater than zero." };
+      if (!(input.total > 0))
+        return { ok: false, message: "Bill total must be greater than zero." };
 
       const clash = data.purchaseBills.find(
         (b) =>
@@ -841,10 +990,20 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           lines: input.lines ?? [],
           makingLines: input.makingLines ?? [],
           subtotal: round2(input.subtotal),
-          discount: 0,
-          taxableAmount: round2(input.total),
-          taxAmount: 0,
+          discount: round2(input.discount ?? 0),
+          taxableAmount: round2(input.taxableAmount ?? input.total),
+          taxAmount: round2(input.taxAmount ?? 0),
+          dueDays: input.dueDays,
+          discountMode: input.discountMode,
+          discountValue: input.discountValue,
+          purchaseType: input.purchaseType,
+          gstRate: input.gstRate,
+          supplyLocation: input.supplyLocation,
+          cgstAmount: input.cgstAmount,
+          sgstAmount: input.sgstAmount,
+          igstAmount: input.igstAmount,
           shipping: 0,
+
           roundOff: 0,
           notes: input.notes,
           createdAt: existing?.createdAt ?? now,
@@ -856,7 +1015,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
             ? prev.purchaseBills.map((b) => (b.id === id ? bill : b))
             : [...prev.purchaseBills, bill],
           auditLogs: [
-            log(existing ? "update" : "create", "purchase_bill", `${number} — ₹${round2(input.total)}`),
+            log(
+              existing ? "update" : "create",
+              "purchase_bill",
+              `${number} — ₹${round2(input.total)}`,
+            ),
             ...prev.auditLogs,
           ],
         };
@@ -874,7 +1037,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           b.id === id ? { ...b, voided: true, updatedAt: new Date().toISOString() } : b,
         ),
         auditLogs: [
-          log("void", "purchase_bill", `${prev.purchaseBills.find((b) => b.id === id)?.number ?? id} voided`),
+          log(
+            "void",
+            "purchase_bill",
+            `${prev.purchaseBills.find((b) => b.id === id)?.number ?? id} voided`,
+          ),
           ...prev.auditLogs,
         ],
       }));
@@ -890,7 +1057,11 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
           b.id === id ? { ...b, voided: false, updatedAt: new Date().toISOString() } : b,
         ),
         auditLogs: [
-          log("restore", "purchase_bill", `${prev.purchaseBills.find((b) => b.id === id)?.number ?? id} restored`),
+          log(
+            "restore",
+            "purchase_bill",
+            `${prev.purchaseBills.find((b) => b.id === id)?.number ?? id} restored`,
+          ),
           ...prev.auditLogs,
         ],
       }));
@@ -929,8 +1100,13 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
         const exists = current.some((c) => c.id === contact.id);
         const next: LepdoData = {
           ...prev,
-          [key]: exists ? current.map((c) => (c.id === contact.id ? contact : c)) : [...current, contact],
-          auditLogs: [log(exists ? "update" : "create", input.kind, contact.name), ...prev.auditLogs],
+          [key]: exists
+            ? current.map((c) => (c.id === contact.id ? contact : c))
+            : [...current, contact],
+          auditLogs: [
+            log(exists ? "update" : "create", input.kind, contact.name),
+            ...prev.auditLogs,
+          ],
         };
         // keep the name used on existing invoices in sync after a rename
         if (exists && previousName && previousName !== contact.name) {
@@ -985,24 +1161,32 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
 
   const setRecordVoided = useCallback<StoreValue["setRecordVoided"]>(
     (key, id, voided) => {
-      setData((prev) => ({
-        ...prev,
-        [key]: (prev[key] as { id: string }[]).map((r) =>
-          r.id === id ? { ...r, voided, updatedAt: new Date().toISOString(), updatedBy: USER } : r,
-        ),
-        auditLogs: [log(voided ? "void" : "restore", key, id), ...prev.auditLogs],
-      }) as LepdoData);
+      setData(
+        (prev) =>
+          ({
+            ...prev,
+            [key]: (prev[key] as { id: string }[]).map((r) =>
+              r.id === id
+                ? { ...r, voided, updatedAt: new Date().toISOString(), updatedBy: USER }
+                : r,
+            ),
+            auditLogs: [log(voided ? "void" : "restore", key, id), ...prev.auditLogs],
+          }) as LepdoData,
+      );
     },
     [log],
   );
 
   const removeRecord = useCallback<StoreValue["removeRecord"]>(
     (key, id) => {
-      setData((prev) => ({
-        ...prev,
-        [key]: (prev[key] as { id: string }[]).filter((r) => r.id !== id),
-        auditLogs: [log("delete", key, id), ...prev.auditLogs],
-      }) as LepdoData);
+      setData(
+        (prev) =>
+          ({
+            ...prev,
+            [key]: (prev[key] as { id: string }[]).filter((r) => r.id !== id),
+            auditLogs: [log("delete", key, id), ...prev.auditLogs],
+          }) as LepdoData,
+      );
     },
     [log],
   );
@@ -1018,12 +1202,101 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
     [log],
   );
 
+  const saveMaster = useCallback<StoreValue["saveMaster"]>(
+    (masterId, value) => {
+      setData((prev) => {
+        const list = prev.masters[masterId] ?? [];
+        const name = value.name.trim();
+        if (!name) return prev;
+        const exists = value.id ? list.some((v) => v.id === value.id) : false;
+        const nextList = exists
+          ? list.map((v) =>
+              v.id === value.id ? { ...v, name, active: value.active ?? v.active } : v,
+            )
+          : [...list, { id: uid("mv"), name, active: value.active ?? true }];
+        return {
+          ...prev,
+          masters: { ...prev.masters, [masterId]: nextList },
+          auditLogs: [
+            log(exists ? "update" : "create", `master:${masterId}`, name),
+            ...prev.auditLogs,
+          ],
+        };
+      });
+    },
+    [log],
+  );
+
+  const setMasterActive = useCallback<StoreValue["setMasterActive"]>(
+    (masterId, id, active) => {
+      setData((prev) => ({
+        ...prev,
+        masters: {
+          ...prev.masters,
+          [masterId]: (prev.masters[masterId] ?? []).map((v) =>
+            v.id === id ? { ...v, active } : v,
+          ),
+        },
+        auditLogs: [
+          log(active ? "activate" : "deactivate", `master:${masterId}`, id),
+          ...prev.auditLogs,
+        ],
+      }));
+    },
+    [log],
+  );
+
+  const masterValueInUse = useCallback(
+    (name: string) => {
+      const n = name.trim().toLowerCase();
+      const hit = (v: string | undefined | null) => (v ?? "").trim().toLowerCase() === n;
+      return (
+        data.salesInvoices.some(
+          (i) => hit(i.platform) || hit(i.currency) || hit(i.saleType) || hit(i.gstType),
+        ) ||
+        data.purchaseBills.some((b) => hit(b.currency) || hit(b.purchaseType)) ||
+        data.transactions.some((t) => hit(t.expenseCategory) || hit(t.drawingCategory)) ||
+        data.salesInvoices.some((i) =>
+          (i.jewelryItems ?? []).some(
+            (j) =>
+              hit(j.metal) ||
+              hit(j.category) ||
+              hit(j.metalColour) ||
+              j.stones.some((s) => hit(s.stoneType)),
+          ),
+        )
+      );
+    },
+    [data.salesInvoices, data.purchaseBills, data.transactions],
+  );
+
+  const removeMaster = useCallback<StoreValue["removeMaster"]>(
+    (masterId, id) => {
+      const value = (data.masters[masterId] ?? []).find((v) => v.id === id);
+      if (!value) return { ok: false, message: "Value not found." };
+      if (masterValueInUse(value.name)) {
+        setMasterActive(masterId, id, false);
+        return {
+          ok: false,
+          message: `"${value.name}" is used on existing records — deactivated instead of deleted.`,
+        };
+      }
+      setData((prev) => ({
+        ...prev,
+        masters: {
+          ...prev.masters,
+          [masterId]: (prev.masters[masterId] ?? []).filter((v) => v.id !== id),
+        },
+        auditLogs: [log("delete", `master:${masterId}`, value.name), ...prev.auditLogs],
+      }));
+      return { ok: true, message: `"${value.name}" deleted.` };
+    },
+    [data.masters, log, masterValueInUse, setMasterActive],
+  );
+
   const resetDemoData = useCallback(() => {
     setData(buildSeed());
   }, []);
-
-
-
 
   const value = useMemo<StoreValue>(
     () => ({
@@ -1059,6 +1332,9 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       setRecordVoided,
       removeRecord,
       saveSettings,
+      saveMaster,
+      setMasterActive,
+      removeMaster,
       stamp,
     }),
     [
@@ -1094,6 +1370,9 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
       setRecordVoided,
       removeRecord,
       saveSettings,
+      saveMaster,
+      setMasterActive,
+      removeMaster,
       stamp,
     ],
   );

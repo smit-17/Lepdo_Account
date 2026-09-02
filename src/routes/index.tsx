@@ -1,17 +1,15 @@
+import { isPosted } from "@/lib/lepdo/entry";
 import { useMemo, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import {
   Banknote,
   Landmark,
-  Plus,
   ReceiptIndianRupee,
   ShoppingCart,
   TrendingUp,
   Wallet,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { PageHeading } from "@/components/lepdo/bits";
-import { QuickEntryMenu } from "@/components/lepdo/AppShell";
 import { useShell } from "@/components/lepdo/shell-context";
 import { periodLabel } from "@/lib/lepdo/period";
 import { formatMoney, round2 } from "@/lib/lepdo/format";
@@ -48,7 +46,7 @@ function Dashboard() {
 
   const inRange = (d: string) => d >= from && d <= to;
 
-  const live = useMemo(() => store.transactions.filter((t) => !t.voided), [store.transactions]);
+  const live = useMemo(() => store.transactions.filter((t) => isPosted(t)), [store.transactions]);
 
   const sum = (rows: { amount: number }[]) => round2(rows.reduce((s, r) => s + r.amount, 0));
 
@@ -67,30 +65,22 @@ function Dashboard() {
   const expensePeriod = sum(live.filter((t) => t.category === "expense" && inRange(t.date)));
 
   const bankTotal = round2(
-    store.bankAccounts.filter((a) => a.active).reduce((s, a) => s + store.balanceOf("bank", a.id), 0),
+    store.bankAccounts
+      .filter((a) => a.active)
+      .reduce((s, a) => s + store.balanceOf("bank", a.id), 0),
   );
   const cashTotal = round2(
-    store.cashLocations.filter((l) => l.active).reduce((s, l) => s + store.balanceOf("cash", l.id), 0),
+    store.cashLocations
+      .filter((l) => l.active)
+      .reduce((s, l) => s + store.balanceOf("cash", l.id), 0),
   );
 
   return (
     <div className="space-y-4">
-      <div className="flex justify-end lg:hidden">
-        <QuickEntryMenu onPick={shell.openEntry} className="h-8 px-3 text-xs" />
-      </div>
-
       <div className="hidden lg:block">
-        <PageHeading title="Dashboard" breadcrumb="LEPDO Accounting / Dashboard">
-          <div className="grid w-full grid-cols-2 gap-2 sm:flex sm:w-auto">
-            <Button onClick={() => shell.openEntry({ sourceType: "bank" })}>
-              <Plus className="size-4" /> Bank Entry
-            </Button>
-            <Button variant="outline" onClick={() => shell.openEntry({ sourceType: "cash" })}>
-              <Plus className="size-4" /> Cash Entry
-            </Button>
-          </div>
-        </PageHeading>
+        <PageHeading title="Dashboard" breadcrumb="LEPDO Accounting / Dashboard" />
       </div>
+      <h1 className="text-lg font-bold text-navy lg:hidden">Dashboard</h1>
 
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:gap-4 2xl:grid-cols-4">
         <StatGroup
@@ -159,7 +149,9 @@ function StatGroup({
   return (
     <section className={cn("rounded-xl border p-4 shadow-sm", className)}>
       <h2 className={cn("flex items-center gap-2 text-sm font-semibold", accent)}>
-        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-card/70">{icon}</span>
+        <span className="grid size-7 shrink-0 place-items-center rounded-lg bg-card/70">
+          {icon}
+        </span>
         {title}
       </h2>
       <dl className="mt-3 space-y-1.5">
@@ -178,7 +170,9 @@ function StatGroup({
             <dd
               className={cn(
                 "num shrink-0 text-right tabular-nums",
-                r.strong ? cn("text-lg font-semibold", accent) : "text-sm font-medium text-foreground",
+                r.strong
+                  ? cn("text-lg font-semibold", accent)
+                  : "text-sm font-medium text-foreground",
               )}
             >
               {formatMoney(r.value)}

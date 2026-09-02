@@ -1,3 +1,4 @@
+import { isLedgerEntry, isPosted } from "./entry";
 import { formatDate, round2, todayISO } from "./format";
 import type { Invoice, Party, Transaction } from "./types";
 
@@ -62,7 +63,7 @@ export const STATUS_CLASS: Record<InvoiceStatus | "settled", string> = {
 };
 
 export const isSalesReceipt = (t: Transaction) =>
-  !t.voided && t.category === "sale_payment" && t.direction === "in";
+  isPosted(t) && !isLedgerEntry(t) && t.category === "sale_payment" && t.direction === "in";
 
 export function paymentAccountLabel(
   t: Transaction,
@@ -119,7 +120,9 @@ export function buildSalesModel(input: BuildInput): SalesModel {
 
   const receiptTx = input.transactions
     .filter((t) => isSalesReceipt(t) && (!asOf || t.date <= asOf))
-    .sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date)));
+    .sort((a, b) =>
+      a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date),
+    );
 
   const invoiceIds = new Set(invoices.map((i) => i.id));
   const receivedByInvoice = new Map<string, number>();
@@ -144,7 +147,10 @@ export function buildSalesModel(input: BuildInput): SalesModel {
     };
     payments.push(row);
     for (const a of allocs) {
-      receivedByInvoice.set(a.invoiceId, round2((receivedByInvoice.get(a.invoiceId) ?? 0) + a.amount));
+      receivedByInvoice.set(
+        a.invoiceId,
+        round2((receivedByInvoice.get(a.invoiceId) ?? 0) + a.amount),
+      );
       const list = paymentsByInvoice.get(a.invoiceId) ?? [];
       list.push({ payment: row, amount: round2(a.amount) });
       paymentsByInvoice.set(a.invoiceId, list);
@@ -182,7 +188,11 @@ export function buildSalesModel(input: BuildInput): SalesModel {
   const customerIds = new Set<string>([...byParty.keys(), ...advanceByParty.keys()]);
   const customers: CustomerView[] = [...customerIds]
     .map((id) => {
-      const party = partyById.get(id) ?? { id, name: "Unknown customer", type: "customer" as const };
+      const party = partyById.get(id) ?? {
+        id,
+        name: "Unknown customer",
+        type: "customer" as const,
+      };
       const list = byParty.get(id) ?? [];
       const totalSales = round2(list.reduce((s, v) => s + v.invoice.total, 0));
       const received = round2(list.reduce((s, v) => s + v.received, 0));
@@ -265,7 +275,9 @@ export function customerLedger(customer: CustomerView, payments: PaymentRow[]): 
         credit: p.advance,
       });
   }
-  rows.sort((a, b) => (a.date === b.date ? a.type.localeCompare(b.type) : a.date.localeCompare(b.date)));
+  rows.sort((a, b) =>
+    a.date === b.date ? a.type.localeCompare(b.type) : a.date.localeCompare(b.date),
+  );
   let balance = 0;
   return rows.map((r) => {
     balance = round2(balance + r.debit - r.credit);
@@ -284,6 +296,10 @@ export const PLATFORMS = [
   "Website",
   "IndiaMART",
   "BNI",
+  "WhatsApp",
+  "Instagram",
+  "Referral",
+  "Walk-in",
   "Other",
 ] as const;
 

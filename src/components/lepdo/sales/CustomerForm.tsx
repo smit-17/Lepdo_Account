@@ -80,22 +80,38 @@ export function CustomerForm({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className={MODAL_CLASS}>
         <DialogHeader className="shrink-0 space-y-1 border-b border-border px-5 py-4 pr-12 text-left">
-          <DialogTitle className="text-navy">{editing ? "Edit customer" : "Add customer"}</DialogTitle>
-          <DialogDescription>Customer details are reused on every invoice and statement.</DialogDescription>
+          <DialogTitle className="text-navy">
+            {editing ? "Edit customer" : "Add customer"}
+          </DialogTitle>
+          <DialogDescription>
+            Customer details are reused on every invoice and statement.
+          </DialogDescription>
         </DialogHeader>
         <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden px-5 py-5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormField label="Customer name" required>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <Input
+                value={form.name}
+                onChange={(e) => setForm({ ...form, name: e.target.value })}
+              />
             </FormField>
             <FormField label="Company (optional)">
-              <Input value={form.company} onChange={(e) => setForm({ ...form, company: e.target.value })} />
+              <Input
+                value={form.company}
+                onChange={(e) => setForm({ ...form, company: e.target.value })}
+              />
             </FormField>
             <FormField label="Mobile" required>
-              <Input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} />
+              <Input
+                value={form.phone}
+                onChange={(e) => setForm({ ...form, phone: e.target.value })}
+              />
             </FormField>
             <FormField label="Email (optional)">
-              <Input value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} />
+              <Input
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+              />
             </FormField>
             <FormField label="Address">
               <Input
@@ -104,13 +120,22 @@ export function CustomerForm({
               />
             </FormField>
             <FormField label="City / State">
-              <Input value={form.city} onChange={(e) => setForm({ ...form, city: e.target.value })} />
+              <Input
+                value={form.city}
+                onChange={(e) => setForm({ ...form, city: e.target.value })}
+              />
             </FormField>
             <FormField label="Country">
-              <Input value={form.country} onChange={(e) => setForm({ ...form, country: e.target.value })} />
+              <Input
+                value={form.country}
+                onChange={(e) => setForm({ ...form, country: e.target.value })}
+              />
             </FormField>
             <FormField label="GST number (optional)">
-              <Input value={form.gstin} onChange={(e) => setForm({ ...form, gstin: e.target.value })} />
+              <Input
+                value={form.gstin}
+                onChange={(e) => setForm({ ...form, gstin: e.target.value })}
+              />
             </FormField>
           </div>
         </div>

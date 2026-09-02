@@ -1,5 +1,7 @@
-import { useMemo, useState } from "react";
+import { isPosted } from "@/lib/lepdo/entry";
+import { useMemo, useState, type ReactNode } from "react";
 import { createFileRoute } from "@tanstack/react-router";
+import { Info } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -8,8 +10,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Input } from "@/components/ui/input";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
-import { formatDate, formatDateTime, formatMoney, todayISO } from "@/lib/lepdo/format";
+import { formatDate, formatDateTime, formatMoney, round2, todayISO } from "@/lib/lepdo/format";
 import { useLepdo } from "@/lib/lepdo/store";
 
 export const Route = createFileRoute("/pl")({
@@ -19,12 +27,12 @@ export const Route = createFileRoute("/pl")({
       {
         name: "description",
         content:
-          "Auto-calculated profit and loss statement for LEPDO built from sales, purchase, expense, stock and tax entries.",
+          "Auto-calculated profit and loss statement for LEPDO built from sales, purchase, expense and ledger entries.",
       },
       { property: "og:title", content: "Profit & Loss — LEPDO Accounting" },
       {
         property: "og:description",
-        content: "Standard P&L statement with gross profit, profit before tax and net profit.",
+        content: "Standard P&L statement with gross profit, EBITDA, EBIT and net profit.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -72,65 +80,66 @@ export default function ProfitLoss() {
 
   const model = useMemo(() => {
     const sumOf = <T,>(rows: T[], amount: (r: T) => number) =>
-      rows.reduce((s, r) => s + (amount(r) || 0), 0);
+      round2(rows.reduce((s, r) => s + (amount(r) || 0), 0));
 
-    const salesTotal = sumOf(
+    const salesRevenue = sumOf(
       store.salesInvoices.filter((i) => !i.voided && inRange(i.date)),
       (i) => i.total,
     );
 
-    const purchaseTotal = sumOf(
+    const cogs = sumOf(
       store.purchaseBills.filter((i) => !i.voided && inRange(i.date)),
       (i) => i.total,
     );
 
-    const live = store.transactions.filter((t) => !t.voided && inRange(t.date));
+    const live = store.transactions.filter((t) => isPosted(t) && inRange(t.date));
 
-    const expenseTotal = sumOf(
+    // Operating expenses: category "expense" only — excludes interest, depreciation and tax.
+    const operatingExpenses = sumOf(
       live.filter((t) => t.category === "expense"),
       (t) => t.amount,
     );
 
-    const otherIncome = live
-      .filter((t) => t.direction === "in" && (t.category === "supplier_refund" || t.category === "other"))
-      .reduce((s, t) => s + t.amount, 0);
+    // Net interest: interest paid out less interest received, from the "interest" category.
+    const interest = sumOf(live.filter((t) => t.category === "interest"), (t) =>
+      t.direction === "out" ? t.amount : -t.amount,
+    );
 
-    const sales = salesTotal;
-    const purchases = purchaseTotal;
-    const openingStock = 0;
-    const closingStock = 0;
-    const directCosts = 0;
-    const cogs = openingStock + purchases + directCosts - closingStock;
-    const grossProfit = sales - cogs;
-    const opex = expenseTotal;
-    const interestDep = 0;
-    const pbt = grossProfit - opex + otherIncome - interestDep;
+    // No depreciation / tax source in the ledger yet — shown as zero until a category exists.
+    const depreciation = 0;
     const tax = 0;
-    const net = pbt - tax;
+
+    const grossProfit = round2(salesRevenue - cogs);
+    const ebitda = round2(grossProfit - operatingExpenses);
+    const ebit = round2(ebitda - depreciation);
+    const pbt = round2(ebit - interest);
+    const net = round2(pbt - tax);
 
     return {
-      sales,
-      purchases,
-      openingStock,
-      closingStock,
-      directCosts,
+      salesRevenue,
       cogs,
       grossProfit,
-      opex,
-      otherIncome,
-      interestDep,
+      operatingExpenses,
+      ebitda,
+      depreciation,
+      ebit,
+      interest,
       pbt,
       tax,
       net,
     };
-  }, [store.salesInvoices, store.purchaseBills, store.transactions, store.parties, from, to]);
+  }, [store.salesInvoices, store.purchaseBills, store.transactions, from, to]);
 
   const lastUpdated = useMemo(() => {
-    const stamps = store.transactions.map((t) => t.updatedAt).filter(Boolean).sort();
+    const stamps = store.transactions
+      .map((t) => t.updatedAt)
+      .filter(Boolean)
+      .sort();
     return stamps.length ? stamps[stamps.length - 1]! : null;
   }, [store.transactions]);
 
-  const pct = (n: number) => (model.sales ? `${((n / model.sales) * 100).toFixed(1)}%` : "—");
+  const pct = (n: number) =>
+    model.salesRevenue ? `${((n / model.salesRevenue) * 100).toFixed(1)}%` : "—";
 
   return (
     <div className="space-y-4">
@@ -176,67 +185,86 @@ export default function ProfitLoss() {
         </div>
       </div>
 
-      <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
-        <table className="w-full table-fixed border-collapse text-sm">
-          <colgroup>
-            <col />
-            <col className="w-[110px] sm:w-[170px]" />
-            <col className="w-[64px] sm:w-[110px]" />
-          </colgroup>
-          <thead>
-            <tr className="border-b-2 border-gold bg-muted/60 text-navy">
-              <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide">
-                Particulars
-              </th>
-              <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide">
-                Amount
-              </th>
-              <th className="px-2 py-2 text-right text-xs font-semibold uppercase tracking-wide">
-                % Sales
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            <Row label="Sales Revenue" amount={model.sales} pct={pct(model.sales)} bg="bg-pl-green" bold />
+      <TooltipProvider delayDuration={150}>
+        <section className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+          <table className="w-full table-fixed border-collapse text-sm">
+            <colgroup>
+              <col />
+              <col className="w-[110px] sm:w-[170px]" />
+              <col className="w-[64px] sm:w-[110px]" />
+            </colgroup>
+            <thead>
+              <tr className="border-b-2 border-gold bg-muted/60 text-navy">
+                <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide">
+                  Particulars
+                </th>
+                <th className="px-3 py-2 text-right text-xs font-semibold uppercase tracking-wide">
+                  Amount
+                </th>
+                <th className="px-2 py-2 text-right text-xs font-semibold uppercase tracking-wide">
+                  % Sales
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              <Row label="Sales Revenue" amount={model.salesRevenue} pct={pct(model.salesRevenue)} bg="bg-pl-green" bold />
 
-            <Row
-              label="Cost of Goods Sold"
-              amount={model.cogs}
-              pct={pct(model.cogs)}
-              bg="bg-pl-orange"
-              bold
-            />
-            <Row label="Opening Stock" amount={model.openingStock} pct={pct(model.openingStock)} indent />
-            <Row label="Purchases" amount={model.purchases} pct={pct(model.purchases)} indent />
-            <Row label="Direct Costs" amount={model.directCosts} pct={pct(model.directCosts)} indent />
-            <Row
-              label="Less: Closing Stock"
-              amount={-model.closingStock}
-              pct={pct(model.closingStock)}
-              indent
-            />
+              <Row label="Cost of Goods Sold" amount={model.cogs} pct={pct(model.cogs)} bg="bg-pl-orange" bold />
 
-            <TotalRow label="Gross Profit / Loss" amount={model.grossProfit} pct={pct(model.grossProfit)} />
+              <TotalRow
+                label="Gross Profit / Loss"
+                amount={model.grossProfit}
+                pct={pct(model.grossProfit)}
+                info="Sales Revenue minus Cost of Goods Sold — profit from core trading before any overheads."
+              />
 
-            <Row label="Operating Expenses" amount={model.opex} pct={pct(model.opex)} bg="bg-pl-red" bold />
+              <Row
+                label="Operating Expenses"
+                amount={model.operatingExpenses}
+                pct={pct(model.operatingExpenses)}
+                bg="bg-pl-red"
+                bold
+              />
 
-            <Row label="Other Income" amount={model.otherIncome} pct={pct(model.otherIncome)} bg="bg-pl-blue" bold />
-            <Row
-              label="Interest and Depreciation"
-              amount={model.interestDep}
-              pct={pct(model.interestDep)}
-              bg="bg-pl-purple"
-              bold
-            />
+              <TotalRow
+                label="EBITDA"
+                amount={model.ebitda}
+                pct={pct(model.ebitda)}
+                info="Earnings Before Interest, Tax, Depreciation & Amortization — Gross Profit minus Operating Expenses. Shows core operating performance."
+              />
 
-            <TotalRow label="Profit Before Tax" amount={model.pbt} pct={pct(model.pbt)} />
+              <Row
+                label="Depreciation & Amortization"
+                amount={model.depreciation}
+                pct={pct(model.depreciation)}
+                bg="bg-pl-purple"
+                bold
+                info="The gradual write-down of the value of fixed assets (depreciation) and intangible assets (amortization) over their useful life."
+              />
 
-            <Row label="Tax" amount={model.tax} pct={pct(model.tax)} bg="bg-pl-yellow" bold />
+              <TotalRow
+                label="EBIT"
+                amount={model.ebit}
+                pct={pct(model.ebit)}
+                info="Earnings Before Interest & Tax — EBITDA minus Depreciation & Amortization."
+              />
 
-            <TotalRow label="Net Profit / Loss" amount={model.net} pct={pct(model.net)} emphasis />
-          </tbody>
-        </table>
-      </section>
+              <Row label="Interest" amount={model.interest} pct={pct(model.interest)} bg="bg-pl-blue" bold />
+
+              <TotalRow
+                label="Profit Before Tax"
+                amount={model.pbt}
+                pct={pct(model.pbt)}
+                info="EBIT minus Interest — profit earned before accounting for income tax."
+              />
+
+              <Row label="Tax" amount={model.tax} pct={pct(model.tax)} bg="bg-pl-yellow" bold />
+
+              <TotalRow label="Net Profit / Loss" amount={model.net} pct={pct(model.net)} emphasis />
+            </tbody>
+          </table>
+        </section>
+      </TooltipProvider>
 
       <p className="text-xs text-muted-foreground">
         Last updated: {lastUpdated ? formatDateTime(lastUpdated) : "—"} · figures auto-fetched from
@@ -254,6 +282,28 @@ function Amount({ value, className }: { value: number; className?: string }) {
   );
 }
 
+function InfoTip({ text }: { text: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          aria-label="More info"
+          onClick={(e) => {
+            e.stopPropagation();
+            setOpen((v) => !v);
+          }}
+          className="inline-flex shrink-0 items-center justify-center rounded-full text-muted-foreground hover:text-navy"
+        >
+          <Info className="size-3.5" />
+        </button>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-[220px] text-left">{text}</TooltipContent>
+    </Tooltip>
+  );
+}
+
 function Row({
   label,
   amount,
@@ -261,6 +311,7 @@ function Row({
   bg,
   bold,
   indent,
+  info,
 }: {
   label: string;
   amount: number;
@@ -268,14 +319,18 @@ function Row({
   bg?: string;
   bold?: boolean;
   indent?: boolean;
+  info?: string;
 }) {
   return (
     <tr className={cn("border-b border-border/70", bg ?? (indent ? "bg-pl-grey" : "bg-card"))}>
       <td className={cn("px-3 py-2 text-navy", indent && "pl-6 sm:pl-8", bold && "font-semibold")}>
-        <span className="block truncate">{label}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="truncate">{label}</span>
+          {info ? <InfoTip text={info} /> : null}
+        </span>
       </td>
       <td className={cn("px-3 py-2 text-right text-navy", bold && "font-semibold")}>
-        <Amount value={amount} />
+        <Amount value={amount} {...(amount < 0 ? { className: "text-neg" } : {})} />
       </td>
       <td className="px-2 py-2 text-right text-xs text-muted-foreground">{pct}</td>
     </tr>
@@ -287,11 +342,13 @@ function TotalRow({
   amount,
   pct,
   emphasis,
+  info,
 }: {
   label: string;
   amount: number;
   pct: string;
   emphasis?: boolean;
+  info?: string;
 }) {
   const loss = amount < 0;
   const name = label.replace(" / Loss", loss ? " — Loss" : "");
@@ -304,7 +361,10 @@ function TotalRow({
       )}
     >
       <td className={cn("px-3 py-2.5 font-bold text-navy", emphasis && "text-[15px]")}>
-        <span className="block truncate">{name}</span>
+        <span className="flex items-center gap-1.5">
+          <span className="truncate">{name}</span>
+          {info ? <InfoTip text={info} /> : null}
+        </span>
       </td>
       <td
         className={cn(
@@ -319,4 +379,3 @@ function TotalRow({
     </tr>
   );
 }
-

@@ -301,23 +301,23 @@ function PurchasePage() {
   return (
     <div className="space-y-4">
       {/* header */}
-      <header className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 sm:flex sm:flex-wrap sm:justify-between">
+      <header className="space-y-3">
         <div className="min-w-0">
           <h1 className="truncate text-lg font-semibold text-navy sm:text-xl">Purchase</h1>
           <p className="truncate text-xs text-muted-foreground">
             {label} · {rows.length} bill{rows.length === 1 ? "" : "s"}
           </p>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          <div className="relative">
-            <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-            <Input
-              className="h-9 w-[150px] pl-8 sm:w-[220px]"
-              placeholder="Search purchases"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+        <div className="relative">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            className="h-9 w-full pl-8"
+            placeholder="Search purchases"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
           <Button
             size="sm"
             onClick={() => {
@@ -339,7 +339,7 @@ function PurchasePage() {
           </Button>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" variant="outline">
+              <Button size="sm" variant="outline" className="col-span-2 sm:col-span-1">
                 <Download className="mr-1 h-4 w-4" /> Report
               </Button>
             </DropdownMenuTrigger>
@@ -371,7 +371,7 @@ function PurchasePage() {
       </header>
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as Tab)}>
-        <TabsList className="flex w-full flex-wrap justify-start gap-1">
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:flex sm:h-9 sm:w-auto sm:flex-wrap">
           {TABS.map((t) => (
             <TabsTrigger key={t.id} value={t.id} className="text-xs sm:text-sm">
               {t.label}
@@ -525,7 +525,7 @@ function PurchasePage() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button size="sm" variant="outline" className="h-9">
-                    <Download className="mr-1 h-4 w-4" /> Filtered
+                    <Download className="mr-1 h-4 w-4" /> Download Filtered Report
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -741,40 +741,46 @@ function BillRow({
   onVoid: () => void;
 }) {
   return (
-    <div className="rounded-lg border border-border p-2">
-      <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2">
-        <div className="min-w-0">
-          <p className="truncate text-sm font-semibold text-navy">
-            {view.bill.number} · {view.supplier?.name ?? "—"}
-          </p>
-          <p className="num truncate text-[11px] text-muted-foreground">
-            {formatDate(view.bill.date)}
-            {view.bill.dueDate ? ` · Due ${formatDate(view.bill.dueDate)}` : ""} ·{" "}
-            {view.bill.billKind === "jewelry_making" ? "Jewelry Making" : "Diamond"}
-            {view.bill.brokerName ? ` · Broker ${view.bill.brokerName}` : ""}
-          </p>
+    <div className="space-y-2 rounded-lg border border-border p-3">
+      <p className="text-sm font-semibold text-navy">
+        <span className="break-words">{view.bill.number}</span>
+        <span className="text-muted-foreground"> · </span>
+        <span className="break-words">{view.supplier?.name ?? "—"}</span>
+      </p>
+      <p className="text-[11px] text-muted-foreground">
+        {formatDate(view.bill.date)}
+        {view.bill.dueDate ? ` · Due ${formatDate(view.bill.dueDate)}` : ""} ·{" "}
+        {view.bill.billKind === "jewelry_making" ? "Jewelry Making" : "Diamond"}
+        {view.bill.purchaseType ? ` · ${view.bill.purchaseType}` : ""}
+        {view.bill.brokerName ? ` · Broker ${view.bill.brokerName}` : ""}
+      </p>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="num flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+          <span>
+            Total <b className="font-semibold text-navy">{formatMoney(view.bill.total)}</b>
+          </span>
+          <span>
+            Paid <b className="font-semibold text-sl-paid">{formatMoney(view.paid)}</b>
+          </span>
+          <span>
+            Pending <b className="font-semibold text-sl-pending">{formatMoney(view.pending)}</b>
+          </span>
         </div>
-        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
-          <div className="num text-right">
-            <p className="text-sm font-semibold text-navy">{formatMoney(view.bill.total)}</p>
-            <p className="text-[11px] text-muted-foreground">
-              Paid {formatMoney(view.paid)} · Pending {formatMoney(view.pending)}
-            </p>
-          </div>
-          <StatusChip status={view.status} />
-          <Button size="sm" variant="ghost" onClick={onEdit}>
-            Edit
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onPay}>
-            Pay
-          </Button>
-          <Button size="sm" variant="ghost" onClick={onPdf}>
-            PDF
-          </Button>
-          <Button size="sm" variant="ghost" className="text-neg" onClick={onVoid}>
-            Void
-          </Button>
-        </div>
+        <StatusChip status={view.status} />
+      </div>
+      <div className="flex flex-wrap items-center gap-1.5 border-t border-border pt-2">
+        <Button size="sm" variant="ghost" onClick={onEdit}>
+          Edit
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onPay}>
+          Pay
+        </Button>
+        <Button size="sm" variant="ghost" onClick={onPdf}>
+          PDF
+        </Button>
+        <Button size="sm" variant="ghost" className="text-neg" onClick={onVoid}>
+          Void
+        </Button>
       </div>
     </div>
   );

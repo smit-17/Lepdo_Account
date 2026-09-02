@@ -19,8 +19,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { CATEGORIES, categoryMap, PAYMENT_METHODS } from "@/lib/lepdo/constants";
+import { isLedgerCategory } from "@/lib/lepdo/entry";
 import { isUchhina } from "@/lib/lepdo/uchhina";
 import { formatMoney, round2, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo, type NewEntryInput } from "@/lib/lepdo/store";
 import type { CategoryId, SourceType, Transaction } from "@/lib/lepdo/types";
 import { cn } from "@/lib/utils";
@@ -111,7 +113,11 @@ export function EntryDrawer({
       config.accountId ??
       (config.sourceType === "bank" ? (accounts[0]?.id ?? "") : (locations[0]?.id ?? ""));
     const cat = config.category;
-    const dir = cat ? (categoryMap[cat].allows === "both" ? "out" : categoryMap[cat].allows[0]!) : "in";
+    const dir = cat
+      ? categoryMap[cat].allows === "both"
+        ? "out"
+        : categoryMap[cat].allows[0]!
+      : "in";
     setForm({
       ...emptyForm(config.sourceType),
       accountId: defaultAccount,
@@ -136,9 +142,12 @@ export function EntryDrawer({
   const unallocated = round2(amount - allocated);
 
   const categoryOptions = CATEGORIES.filter((c) => {
+    if (!isLedgerCategory(c.id)) return false;
     if (sourceType === "cash" && c.id === "bank_transfer") return false;
     if (sourceType === "bank" && c.id === "cash_to_bank") return false;
+    if (sourceType === "bank" && c.id === "cash_transfer") return false;
     if (sourceType === "cash" && c.id === "bank_to_cash") return false;
+    if (sourceType === "cash" && c.id === "bank_charges") return false;
     return true;
   });
 
@@ -147,7 +156,11 @@ export function EntryDrawer({
     if (meta.id === "bank_transfer")
       return accounts
         .filter((a) => a.id !== form.accountId)
-        .map((a) => ({ id: a.id, label: `${a.bankName} — ${a.nickname}`, type: "bank" as SourceType }));
+        .map((a) => ({
+          id: a.id,
+          label: `${a.bankName} — ${a.nickname}`,
+          type: "bank" as SourceType,
+        }));
     if (meta.id === "bank_to_cash")
       return locations.map((l) => ({ id: l.id, label: l.name, type: "cash" as SourceType }));
     return accounts.map((a) => ({
@@ -231,7 +244,11 @@ export function EntryDrawer({
       <DialogContent className="flex max-h-[92dvh] w-[calc(100vw-1.5rem)] max-w-lg flex-col gap-0 overflow-hidden rounded-xl p-0 sm:w-full">
         <DialogHeader className="shrink-0 space-y-1 border-b border-border px-5 py-4 pr-12 text-left sm:px-6">
           <DialogTitle className="text-navy">
-            {config?.editing ? "Edit entry" : sourceType === "bank" ? "Add bank entry" : "Add cash entry"}
+            {config?.editing
+              ? "Edit entry"
+              : sourceType === "bank"
+                ? "Add bank entry"
+                : "Add cash entry"}
           </DialogTitle>
           <DialogDescription>
             All amounts are recorded in ₹ with two-decimal accuracy.
@@ -298,12 +315,7 @@ export function EntryDrawer({
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <Field label="Amount (₹)" required>
-              <Input
-                inputMode="decimal"
-                placeholder="0.00"
-                value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-              />
+              <MoneyInput value={toNum(form.amount)} onChange={(n) => setForm({ ...form, amount: String(n) })} />
             </Field>
             <Field label="Transaction category" required>
               <Select
@@ -382,7 +394,9 @@ export function EntryDrawer({
           {allocationKind ? (
             <div className="rounded-xl border border-border bg-muted/40 p-4">
               <p className="text-sm font-semibold text-navy">
-                {allocationKind === "sales" ? "Allocate to sales invoices" : "Allocate to supplier bills"}
+                {allocationKind === "sales"
+                  ? "Allocate to sales invoices"
+                  : "Allocate to supplier bills"}
               </p>
               {!form.partyId ? (
                 <p className="mt-2 text-sm text-muted-foreground">
@@ -390,8 +404,8 @@ export function EntryDrawer({
                 </p>
               ) : invoices.length === 0 ? (
                 <p className="mt-2 text-sm text-muted-foreground">
-                  No open {allocationKind === "sales" ? "invoices" : "bills"}. The full amount will be
-                  stored as {allocationKind === "sales" ? "customer" : "supplier"} advance.
+                  No open {allocationKind === "sales" ? "invoices" : "bills"}. The full amount will
+                  be stored as {allocationKind === "sales" ? "customer" : "supplier"} advance.
                 </p>
               ) : (
                 <div className="mt-3 space-y-2">
@@ -409,15 +423,7 @@ export function EntryDrawer({
                           </p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <Input
-                            className="h-9 w-28"
-                            inputMode="decimal"
-                            placeholder="0.00"
-                            value={allocations[inv.id] ?? ""}
-                            onChange={(e) =>
-                              setAllocations({ ...allocations, [inv.id]: e.target.value })
-                            }
-                          />
+                          <MoneyInput className="h-9 w-28" value={toNum(allocations[inv.id])} onChange={(n) => setAllocations({ ...allocations, [inv.id]: String(n) })} />
                           <Button
                             type="button"
                             variant="outline"
@@ -425,7 +431,15 @@ export function EntryDrawer({
                             onClick={() =>
                               setAllocations({
                                 ...allocations,
-                                [inv.id]: String(Math.min(due, Math.max(0, unallocated + round2(Number(allocations[inv.id] ?? 0))))),
+                                [inv.id]: String(
+                                  Math.min(
+                                    due,
+                                    Math.max(
+                                      0,
+                                      unallocated + round2(Number(allocations[inv.id] ?? 0)),
+                                    ),
+                                  ),
+                                ),
                               })
                             }
                           >
@@ -484,7 +498,9 @@ export function EntryDrawer({
                 </Select>
               </Field>
             ) : null}
-            <Field label={sourceType === "bank" ? "UTR / reference (optional)" : "Reference (optional)"}>
+            <Field
+              label={sourceType === "bank" ? "UTR / reference (optional)" : "Reference (optional)"}
+            >
               <Input
                 value={form.reference}
                 onChange={(e) => setForm({ ...form, reference: e.target.value })}

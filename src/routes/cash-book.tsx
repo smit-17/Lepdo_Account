@@ -1,3 +1,5 @@
+import { isLedgerEntry } from "@/lib/lepdo/entry";
+import { EntryHistory, EntryRowMenu } from "@/components/lepdo/entry-bits";
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -40,12 +42,13 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { formatDate, formatDateTime, formatMoney, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo, partyName, type NewEntryInput } from "@/lib/lepdo/store";
-import { isUchhina, uchhinaTypeLabel } from "@/lib/lepdo/uchhina";
 import type { CategoryId, Transaction } from "@/lib/lepdo/types";
 import { BANK_PRESETS, bankRange, periodLabel, type BankPreset } from "@/lib/lepdo/bank";
 import { CASH_BOOKS, CASH_CATEGORIES, cashCategoryLabel, fixedDirection } from "@/lib/lepdo/cash";
 import { categoryTone } from "@/lib/lepdo/constants";
+import { Combo } from "@/components/lepdo/sales/ui";
 import {
   downloadCashExcel,
   downloadCashPdf,
@@ -86,7 +89,7 @@ function CashBookPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [viewing, setViewing] = useState<Transaction | null>(null);
-  const [voiding, setVoiding] = useState<Transaction | null>(null);
+  const [deleting, setDeleting] = useState<Transaction | null>(null);
 
   const book = CASH_BOOKS.find((b) => b.id === bookId) ?? CASH_BOOKS[0]!;
 
@@ -109,7 +112,9 @@ function CashBookPage() {
     const map = new Map<string, number>();
     let bal = cashLocations.find((c) => c.id === bookId)?.openingBalance ?? 0;
     const rows = store.transactions
-      .filter((t) => t.accountId === bookId && t.sourceType === "cash" && !t.voided)
+      .filter(
+        (t) => t.accountId === bookId && t.sourceType === "cash" && !t.voided && isLedgerEntry(t),
+      )
       .sort((a, b) =>
         a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
       );
@@ -127,6 +132,7 @@ function CashBookPage() {
           (t) =>
             t.sourceType === "cash" &&
             t.accountId === bookId &&
+            isLedgerEntry(t) &&
             !t.voided &&
             t.date >= from &&
             t.date <= to &&
@@ -138,18 +144,32 @@ function CashBookPage() {
     [store.transactions, bookId, from, to, categoryFilter],
   );
 
+  const postedRows = rows;
+
+  const openEdit = (t: Transaction) => {
+    setEditing(t);
+    setFormOpen(true);
+  };
+
   const totals = useMemo(() => {
-    const cashIn = rows.filter((t) => t.direction === "in").reduce((s, t) => s + t.amount, 0);
-    const cashOut = rows.filter((t) => t.direction === "out").reduce((s, t) => s + t.amount, 0);
+    const cashIn = postedRows.filter((t) => t.direction === "in").reduce((s, t) => s + t.amount, 0);
+    const cashOut = postedRows
+      .filter((t) => t.direction === "out")
+      .reduce((s, t) => s + t.amount, 0);
     const openingBalance = cashLocations.find((c) => c.id === bookId)?.openingBalance ?? 0;
     const prior = store.transactions
       .filter(
-        (t) => t.accountId === bookId && t.sourceType === "cash" && !t.voided && t.date < from,
+        (t) =>
+          t.accountId === bookId &&
+          t.sourceType === "cash" &&
+          !t.voided &&
+          isLedgerEntry(t) &&
+          t.date < from,
       )
       .reduce((s, t) => s + (t.direction === "in" ? t.amount : -t.amount), 0);
     const opening = openingBalance + prior;
     return { cashIn, cashOut, opening, closing: opening + cashIn - cashOut };
-  }, [rows, store.transactions, cashLocations, bookId, from]);
+  }, [postedRows, store.transactions, cashLocations, bookId, from]);
 
   const currentBalance = store.balanceOf("cash", bookId);
 
@@ -163,7 +183,7 @@ function CashBookPage() {
   });
 
   const reportRows = (): CashReportRow[] =>
-    [...rows]
+    [...postedRows]
       .sort((a, b) =>
         a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
       )
@@ -219,9 +239,17 @@ function CashBookPage() {
     <div className="space-y-4 pb-8">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">
-          Cash Book
-        </h1>
+        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">
+            Cash Book
+          </h1>
+          <span className="text-xs font-medium text-muted-foreground">
+            {book.name} balance
+          </span>
+          <span className="num text-xl font-semibold text-navy">
+            {formatMoney(currentBalance)}
+          </span>
+        </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={preset} onValueChange={(v) => setPreset(v as BankPreset)}>
             <SelectTrigger aria-label="Date period filter" className="h-9 w-[168px] text-sm">
@@ -344,7 +372,8 @@ function CashBookPage() {
               <span className="num font-semibold text-navy">{formatMoney(totals.opening)}</span>
             </span>
             <span>
-              Cash In <span className="num font-semibold text-pos">{formatMoney(totals.cashIn)}</span>
+              Cash In{" "}
+              <span className="num font-semibold text-pos">{formatMoney(totals.cashIn)}</span>
             </span>
             <span>
               Cash Out{" "}
@@ -403,13 +432,10 @@ function CashBookPage() {
                         {formatMoney(balances.get(t.id) ?? 0)}
                       </td>
                       <td className="px-2 py-2 text-right">
-                        <RowMenu
+                        <EntryRowMenu
                           onView={() => setViewing(t)}
-                          onEdit={() => {
-                            setEditing(t);
-                            setFormOpen(true);
-                          }}
-                          onVoid={() => setVoiding(t)}
+                          onEdit={() => openEdit(t)}
+                          onDelete={() => setDeleting(t)}
                         />
                       </td>
                     </tr>
@@ -428,7 +454,7 @@ function CashBookPage() {
                       <p className="mt-1 break-words text-sm font-medium text-navy">
                         {t.particulars}
                       </p>
-                      <div className="mt-1.5">
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                         <CashCategoryBadge id={t.category} />
                       </div>
                     </div>
@@ -445,13 +471,10 @@ function CashBookPage() {
                       <span className="num text-xs text-muted-foreground">
                         Bal {formatMoney(balances.get(t.id) ?? 0)}
                       </span>
-                      <RowMenu
+                      <EntryRowMenu
                         onView={() => setViewing(t)}
-                        onEdit={() => {
-                          setEditing(t);
-                          setFormOpen(true);
-                        }}
-                        onVoid={() => setVoiding(t)}
+                        onEdit={() => openEdit(t)}
+                        onDelete={() => setDeleting(t)}
                       />
                     </div>
                   </div>
@@ -485,6 +508,8 @@ function CashBookPage() {
                 ["Date", formatDate(viewing.date)],
                 ["Cash Book", book.name],
                 ["Category", cashCategoryLabel(viewing.category)],
+                ["Transfer ID", viewing.transferGroupId ?? "—"],
+                ["Created by", viewing.createdBy],
                 ["Type", viewing.direction === "in" ? "Cash In" : "Cash Out"],
                 ["Amount", formatMoney(viewing.amount)],
                 ["Balance after", formatMoney(balances.get(viewing.id) ?? 0)],
@@ -500,18 +525,19 @@ function CashBookPage() {
                   </dd>
                 </div>
               ))}
+              <EntryHistory t={viewing} />
             </dl>
           ) : null}
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!voiding} onOpenChange={(o) => !o && setVoiding(null)}>
+      <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Void this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete / void this entry?</AlertDialogTitle>
             <AlertDialogDescription>
-              {voiding
-                ? `${formatMoney(voiding.amount)} on ${formatDate(voiding.date)} will be removed from balances${voiding.transferGroupId ? " along with its linked transfer entry" : ""}. It stays in the audit log.`
+              {deleting
+                ? `${formatMoney(deleting.amount)} on ${formatDate(deleting.date)}${deleting.transferGroupId ? " and its matching transfer entry" : ""} will be removed from the books.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -520,14 +546,12 @@ function CashBookPage() {
             <AlertDialogAction
               className="bg-neg text-white hover:bg-neg/90"
               onClick={() => {
-                if (voiding) {
-                  store.voidEntry(voiding.id);
-                  toast.success("Entry voided.");
-                }
-                setVoiding(null);
+                if (deleting) store.voidEntry(deleting.id);
+                setDeleting(null);
+                toast.success("Entry voided.");
               }}
             >
-              Void entry
+              Delete entry
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -549,39 +573,12 @@ function CashCategoryBadge({ id }: { id: CategoryId | null }) {
   );
 }
 
-function RowMenu({
-  onView,
-  onEdit,
-  onVoid,
-}: {
-  onView: () => void;
-  onEdit: () => void;
-  onVoid: () => void;
-}) {
-  return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="size-8" aria-label="Row actions">
-          <MoreVertical className="size-4" />
-        </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end">
-        <DropdownMenuItem onClick={onView}>View</DropdownMenuItem>
-        <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
-        <DropdownMenuItem className="text-neg" onClick={onVoid}>
-          Void
-        </DropdownMenuItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
 interface FormState {
   date: string;
   direction: "in" | "out";
   category: CategoryId | "";
   bankId: string;
-  person: string;
+  partyName: string;
   particulars: string;
   amount: string;
   reference: string;
@@ -593,7 +590,7 @@ const emptyForm = (): FormState => ({
   direction: "in",
   category: "",
   bankId: "",
-  person: "",
+  partyName: "",
   particulars: "",
   amount: "",
   reference: "",
@@ -629,7 +626,7 @@ function CashEntryForm({
             direction: editing.direction,
             category: editing.category ?? "",
             bankId: "",
-            person: editing.partyId ? partyName(store.parties, editing.partyId) : "",
+            partyName: partyName(store.parties, editing.partyId) === "—" ? "" : partyName(store.parties, editing.partyId),
             particulars: editing.particulars,
             amount: String(editing.amount),
             reference: editing.reference ?? "",
@@ -643,9 +640,9 @@ function CashEntryForm({
     setForm((f) => ({ ...f, [k]: v }));
 
   const amount = Number(form.amount) || 0;
+  const needsParty = form.category === "sale_payment" || form.category === "purchase_payment";
   const isCashTransfer = form.category === "cash_transfer";
   const isBankMove = form.category === "bank_to_cash" || form.category === "cash_to_bank";
-  const uchhina = isUchhina(form.category || null);
   const forced = fixedDirection(form.category);
   const direction: "in" | "out" = isCashTransfer ? "out" : (forced ?? form.direction);
   const otherBook = CASH_BOOKS.find((b) => b.id !== bookId)!;
@@ -676,7 +673,11 @@ function CashEntryForm({
 
   const projected = useMemo(() => {
     if (direction !== "out") return 0;
-    return store.balanceOf("cash", bookId) - amount + (editing && editing.direction === "out" ? editing.amount : 0);
+    return (
+      store.balanceOf("cash", bookId) -
+      amount +
+      (editing && editing.direction === "out" ? editing.amount : 0)
+    );
   }, [store, bookId, direction, amount, editing]);
 
   const submit = () => {
@@ -685,16 +686,12 @@ function CashEntryForm({
       toast.error("Select a category.");
       return;
     }
-    if (uchhina && !form.person.trim()) {
-      toast.error("Person name is required for an Uchhina entry.");
-      return;
-    }
-    if (uchhina && !form.particulars.trim()) {
-      toast.error("Particulars are required for an Uchhina entry.");
-      return;
-    }
     if (isBankMove && !form.bankId) {
       toast.error("Select the bank account for this cash movement.");
+      return;
+    }
+    if (needsParty && !form.partyName.trim()) {
+      toast.error("Select or enter a party.");
       return;
     }
     const negative = direction === "out" && projected < 0;
@@ -708,12 +705,14 @@ function CashEntryForm({
       return;
     }
     setSaving(true);
+
     let partyId: string | null = null;
-    if (uchhina) {
-      const name = form.person.trim();
-      partyId =
-        store.parties.find((p) => p.name.trim().toLowerCase() === name.toLowerCase())?.id ??
-        store.addParty(name, "other").id;
+    if (needsParty) {
+      const name = form.partyName.trim();
+      const existing = store.parties.find((p) => p.name.toLowerCase() === name.toLowerCase());
+      partyId = existing
+        ? existing.id
+        : store.addParty(name, form.category === "sale_payment" ? "customer" : "supplier").id;
     }
 
     let input: NewEntryInput;
@@ -731,6 +730,7 @@ function CashEntryForm({
         notes: form.notes.trim() || undefined,
         destinationType: "cash",
         destinationId: otherBook.id,
+        ledger: true,
       };
     } else if (form.category === "bank_to_cash") {
       input = {
@@ -746,6 +746,7 @@ function CashEntryForm({
         notes: form.notes.trim() || undefined,
         destinationType: "cash",
         destinationId: bookId,
+        ledger: true,
       };
     } else if (form.category === "cash_to_bank") {
       input = {
@@ -761,6 +762,7 @@ function CashEntryForm({
         notes: form.notes.trim() || undefined,
         destinationType: "bank",
         destinationId: form.bankId,
+        ledger: true,
       };
     } else {
       input = {
@@ -774,6 +776,7 @@ function CashEntryForm({
         particulars: form.particulars,
         reference: form.reference.trim() || undefined,
         notes: form.notes.trim() || undefined,
+        ledger: true,
       };
     }
 
@@ -851,21 +854,7 @@ function CashEntryForm({
                 </SelectContent>
               </Select>
             </Field>
-            {uchhina ? (
-              <Field label="Person name">
-                <Input
-                  value={form.person}
-                  placeholder="e.g. Mehul Bhai"
-                  list="uchhina-people-cash"
-                  onChange={(e) => set("person", e.target.value)}
-                />
-                <datalist id="uchhina-people-cash">
-                  {store.parties.map((p) => (
-                    <option key={p.id} value={p.name} />
-                  ))}
-                </datalist>
-              </Field>
-            ) : isBankMove ? (
+            {isBankMove ? (
               <Field label="Bank account">
                 <Select value={form.bankId} onValueChange={(v) => set("bankId", v)}>
                   <SelectTrigger>
@@ -882,25 +871,22 @@ function CashEntryForm({
               </Field>
             ) : (
               <Field label="Amount">
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={form.amount}
-                  placeholder="0.00"
-                  onChange={(e) => set("amount", e.target.value)}
-                />
+                <MoneyInput value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
               </Field>
             )}
           </div>
 
-          {uchhina ? (
-            <p className="rounded-md bg-pl-purple px-3 py-2 text-xs text-navy">
-              Recorded as{" "}
-              <strong>{uchhinaTypeLabel(form.category || null)}</strong>{" "}
-              and shown automatically in the person-wise Uchhina ledger.
-            </p>
+          {needsParty ? (
+            <Field label={form.category === "sale_payment" ? "Customer" : "Supplier"}>
+              <Combo
+                value={form.partyName}
+                onChange={(v) => set("partyName", v)}
+                options={store.parties
+                  .filter((p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"))
+                  .map((p) => p.name)}
+                placeholder="Select or type a party"
+              />
+            </Field>
           ) : null}
 
           {isCashTransfer ? (
@@ -920,17 +906,9 @@ function CashEntryForm({
           </Field>
 
           <div className="grid gap-3 sm:grid-cols-2">
-            {isBankMove || uchhina ? (
+            {isBankMove ? (
               <Field label="Amount">
-                <Input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  inputMode="decimal"
-                  value={form.amount}
-                  placeholder="0.00"
-                  onChange={(e) => set("amount", e.target.value)}
-                />
+                <MoneyInput value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
               </Field>
             ) : null}
             <Field label="Reference (optional)">

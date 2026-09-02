@@ -86,6 +86,9 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
         content: "LEPDO Accounting — bank ledger and cash book for day-to-day money movement.",
       },
       { name: "author", content: "LEPDO" },
+      { name: "robots", content: "noindex, nofollow, noarchive, nosnippet" },
+      { name: "googlebot", content: "noindex, nofollow" },
+
       { property: "og:title", content: "LEPDO Accounting" },
       {
         property: "og:description",
@@ -137,4 +140,3 @@ function RootComponent() {
     </QueryClientProvider>
   );
 }
-

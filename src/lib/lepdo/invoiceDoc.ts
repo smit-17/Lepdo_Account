@@ -5,7 +5,11 @@ import type { AppSettings, Invoice, Party } from "./types";
 export const DEFAULT_HSN = "71049120";
 
 const esc = (v: string) =>
-  String(v).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  String(v)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 
 const inr = new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const money = (n: number) => inr.format(round2(n || 0));
@@ -191,12 +195,16 @@ export function validateInvoice(invoice: Invoice, received?: number): string[] {
 
   if (!t.rows.length) errs.push("Invoice has no item rows.");
   if (!near(t.rowsTotal, t.subtotal))
-    errs.push(`Row totals (${money(t.rowsTotal)}) do not match the saved subtotal (${money(t.subtotal)}).`);
+    errs.push(
+      `Row totals (${money(t.rowsTotal)}) do not match the saved subtotal (${money(t.subtotal)}).`,
+    );
   if (!near(t.subtotal - t.discount + t.shipping, t.taxableAmount))
     errs.push("Subtotal minus discount plus shipping does not match the saved taxable amount.");
   const expected = round2(t.taxableAmount + t.taxAmount);
   if (!near(expected, t.grandTotal))
-    errs.push(`Taxable amount plus GST (${money(expected)}) does not match the grand total (${money(t.grandTotal)}).`);
+    errs.push(
+      `Taxable amount plus GST (${money(expected)}) does not match the grand total (${money(t.grandTotal)}).`,
+    );
   const cur = invoice.currency ?? "INR";
   if (cur !== "INR") {
     const rate = invoice.exchangeRate ?? 0;
@@ -229,7 +237,12 @@ const HEAD_GSTIN = "24NACPS0875L1Z2";
 const HEAD_PHONE = "+91 9638551535";
 const HEAD_ADDRESS = "B-902 Pragati IT PARK - SURAT, INDIA / Elmwood Park, New Jersey, USA";
 
-export function buildInvoiceDocHtml({ invoice, customer, settings, received }: InvoiceDocInput): string {
+export function buildInvoiceDocHtml({
+  invoice,
+  customer,
+  settings,
+  received,
+}: InvoiceDocInput): string {
   const t = invoiceTotals(invoice, received);
   const cur = invoice.currency ?? "INR";
   const sym = cur === "INR" ? "₹" : `${cur} `;
@@ -239,9 +252,13 @@ export function buildInvoiceDocHtml({ invoice, customer, settings, received }: I
     settings.branding.invoiceFooter?.trim() ||
     "Thank you for choosing LEPDO. We are grateful to have you as a part of this journey.";
 
-  const custAddress = [customer?.billingAddress, customer?.city, customer?.country].filter(Boolean).join(", ");
+  const custAddress = [customer?.billingAddress, customer?.city, customer?.country]
+    .filter(Boolean)
+    .join(", ");
   const detail = (label: string, value: string) =>
-    value ? `<div class="drow"><span class="dk">${esc(label)}</span><span class="dv">${esc(value)}</span></div>` : "";
+    value
+      ? `<div class="drow"><span class="dk">${esc(label)}</span><span class="dv">${esc(value)}</span></div>`
+      : "";
 
   const rowsHtml = t.rows
     .map(
@@ -443,7 +460,9 @@ export function buildInvoiceDocHtml({ invoice, customer, settings, received }: I
       </div>
 
       ${
-        settings.invoice.terms?.trim() || settings.invoice.bankDetails?.trim() || invoice.notes?.trim()
+        settings.invoice.terms?.trim() ||
+        settings.invoice.bankDetails?.trim() ||
+        invoice.notes?.trim()
           ? `<div class="notes">
               ${settings.invoice.terms?.trim() ? `<p><span class="t">Payment Terms:</span> ${esc(settings.invoice.terms.trim())}</p>` : ""}
               ${settings.invoice.bankDetails?.trim() ? `<p><span class="t">Bank Details:</span> ${esc(settings.invoice.bankDetails.trim())}</p>` : ""}
@@ -462,7 +481,12 @@ export function buildInvoiceDocHtml({ invoice, customer, settings, received }: I
 export function printInvoiceDoc(html: string): boolean {
   const w = window.open("", "_blank");
   if (!w) return false;
-  w.document.write(html.replace("</body>", `<script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script></body>`));
+  w.document.write(
+    html.replace(
+      "</body>",
+      `<script>window.onload=function(){setTimeout(function(){window.print()},350)}<\/script></body>`,
+    ),
+  );
   w.document.close();
   return true;
 }

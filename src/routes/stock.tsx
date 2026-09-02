@@ -1,11 +1,17 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Gem, Plus } from "lucide-react";
+import { Gem, MoreVertical, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Select,
   SelectContent,
@@ -31,6 +37,7 @@ import {
 import { useLepdo } from "@/lib/lepdo/store";
 import { useShell } from "@/components/lepdo/shell-context";
 import { round2 } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { formatDate, formatMoney, todayISO } from "@/lib/lepdo/format";
 import type { StockEntry } from "@/lib/lepdo/types";
 import type { ExportTable } from "@/lib/lepdo/exportTable";
@@ -233,6 +240,40 @@ function buildMergedLedger(
   return out.reverse();
 }
 
+/** Balance immediately before a given manual entry (excluding it), for edit/adjustment audit. */
+function balanceBeforeEntry(
+  manual: StockEntry[],
+  auto: LedgerRow[],
+  stock: StockKind,
+  excludeId: string,
+): number {
+  const rows = buildMergedLedger(
+    manual.filter((e) => e.id !== excludeId),
+    auto,
+    stock,
+  );
+  // rows are reversed (latest first); find where excluded entry would sit by date order not needed —
+  // we approximate "before" as the current all-time balance excluding this entry's own effect only
+  // when the entry is voided/removed. Since ledger keeps chronological order, the balance just before
+  // the entry in time is what we need; compute chronologically.
+  const target = manual.find((e) => e.id === excludeId);
+  if (!target) return rows[0]?.balance ?? 0;
+  const withoutTarget = manual.filter((e) => e.id !== excludeId);
+  const chronological = [...withoutTarget.filter((e) => e.stock === stock && !e.voided), ...[]];
+  let balance = 0;
+  const merged = [
+    ...chronological.map((e) => ({ date: e.date, id: e.id, qtyIn: e.qtyIn ?? 0, qtyOut: e.qtyOut ?? 0 })),
+    ...auto
+      .filter((r) => r.stock === stock)
+      .map((r) => ({ date: r.date, id: r.id, qtyIn: r.qtyIn, qtyOut: r.qtyOut })),
+  ].sort((a, b) => (a.date === b.date ? a.id.localeCompare(b.id) : a.date.localeCompare(b.date)));
+  for (const r of merged) {
+    if (r.date > target.date || (r.date === target.date && r.id.localeCompare(target.id) >= 0)) break;
+    balance = round2(balance + r.qtyIn - r.qtyOut);
+  }
+  return balance;
+}
+
 function avgRateOf(rows: LedgerRowWithBalance[]): {
   avgRate: number;
   totalQty: number;
@@ -257,6 +298,7 @@ function StockPage() {
   const [tab, setTab] = useState<StockKind>("diamond");
   const [adjustOpen, setAdjustOpen] = useState(false);
   const [viewing, setViewing] = useState<StockEntry | null>(null);
+  const [editing, setEditing] = useState<StockEntry | null>(null);
 
   if (!store.ready) {
     return (
@@ -297,23 +339,31 @@ function StockPage() {
 
         <TabsContent value="diamond" className="mt-4 space-y-4">
           {tab === "diamond" ? (
-            <StockPanel kind="diamond" from={from} to={to} onView={setViewing} />
+            <StockPanel
+              kind="diamond"
+              from={from}
+              to={to}
+              onView={setViewing}
+              onEdit={setEditing}
+            />
           ) : null}
         </TabsContent>
         <TabsContent value="gold" className="mt-4 space-y-4">
           {tab === "gold" ? (
-            <StockPanel kind="gold" from={from} to={to} onView={setViewing} />
+            <StockPanel kind="gold" from={from} to={to} onView={setViewing} onEdit={setEditing} />
           ) : null}
         </TabsContent>
       </Tabs>
 
       <AdjustmentModal open={adjustOpen} onClose={() => setAdjustOpen(false)} />
 
+      <EditStockModal open={!!editing} entry={editing} onClose={() => setEditing(null)} />
+
       {viewing ? (
         <ModalShell
           open={!!viewing}
           onClose={() => setViewing(null)}
-          title="Manual Adjustment"
+          title={viewing.adjustment ? "Manual Adjustment" : "Stock Entry"}
           subtitle={formatDate(viewing.date)}
         >
           <div className="space-y-2 p-4 text-sm">
@@ -321,6 +371,11 @@ function StockPage() {
             <p className="text-muted-foreground">
               Qty In {viewing.qtyIn} · Qty Out {viewing.qtyOut} · Rate {formatMoney(viewing.rate)}
             </p>
+            {viewing.prevQty != null && viewing.newQty != null ? (
+              <p className="text-muted-foreground">
+                Balance changed from {viewing.prevQty} to {viewing.newQty}
+              </p>
+            ) : null}
             {viewing.reason ? (
               <p className="text-muted-foreground">Reason: {viewing.reason}</p>
             ) : null}
@@ -337,11 +392,13 @@ function StockPanel({
   from,
   to,
   onView,
+  onEdit,
 }: {
   kind: StockKind;
   from: string;
   to: string;
   onView: (e: StockEntry) => void;
+  onEdit: (e: StockEntry) => void;
 }) {
   const store = useLepdo();
 
@@ -479,6 +536,7 @@ function StockPanel({
                       {kind === "diamond" ? "Rate/CT" : "Rate/Gram"}
                     </th>
                     <th className="px-3 py-2 text-right font-semibold">Value</th>
+                    <th className="w-8 px-2 py-2" aria-label="Actions" />
                   </tr>
                 </thead>
                 <tbody>
@@ -527,6 +585,27 @@ function StockPanel({
                       <td className="num whitespace-nowrap px-3 py-2 text-right font-semibold text-navy">
                         {formatMoney(r.value)}
                       </td>
+                      <td className="px-2 py-2 text-right">
+                        {r.manual ? (
+                          <DropdownMenu>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                variant="ghost"
+                                size="icon"
+                                className="size-8"
+                                aria-label="Row actions"
+                              >
+                                <MoreVertical className="size-4" />
+                              </Button>
+                            </DropdownMenuTrigger>
+                            <DropdownMenuContent align="end">
+                              <DropdownMenuItem onClick={() => onEdit(r.manual as StockEntry)}>
+                                Edit Stock
+                              </DropdownMenuItem>
+                            </DropdownMenuContent>
+                          </DropdownMenu>
+                        ) : null}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -571,6 +650,16 @@ function StockPanel({
                       <span className="num text-xs font-semibold text-navy">
                         {formatMoney(r.value)}
                       </span>
+                      {r.manual ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1 text-xs text-navy"
+                          onClick={() => onEdit(r.manual as StockEntry)}
+                        >
+                          Edit
+                        </Button>
+                      ) : null}
                     </div>
                   </div>
                 </li>
@@ -642,10 +731,10 @@ function AdjustmentModal({ open, onClose }: { open: boolean; onClose: () => void
     const currentBalance = currentRows[0]?.balance ?? 0;
     const newBalance = round2(currentBalance + inQty - outQty);
     if (newBalance < 0) {
-      const proceed = window.confirm(
-        `This adjustment will make the running ${stock} balance negative (${newBalance}). Continue?`,
+      toast.error(
+        `This adjustment would make the running ${stock} balance negative (${newBalance}). Adjust the quantities before saving.`,
       );
-      if (!proceed) return;
+      return;
     }
 
     setSaving(true);
@@ -661,6 +750,9 @@ function AdjustmentModal({ open, onClose }: { open: boolean; onClose: () => void
         qtyOut: outQty,
         rate: Number(rate) || 0,
         reason: reason.trim(),
+        adjustment: true,
+        prevQty: currentBalance,
+        newQty: newBalance,
         sourceModule: "Manual Adjustment",
         voided: false,
       } as Omit<StockEntry, "id" | "createdAt" | "createdBy" | "updatedAt" | "updatedBy">);
@@ -732,30 +824,152 @@ function AdjustmentModal({ open, onClose }: { open: boolean; onClose: () => void
             />
           </>
         )}
-        <TextField
-          label={stock === "diamond" ? "CT In" : "Gram In"}
-          type="number"
-          value={qtyIn}
-          onChange={setQtyIn}
-        />
-        <TextField
-          label={stock === "diamond" ? "CT Out" : "Gram Out"}
-          type="number"
-          value={qtyOut}
-          onChange={setQtyOut}
-        />
-        <TextField
-          label={stock === "diamond" ? "Rate/CT" : "Rate/Gram"}
-          type="number"
-          value={rate}
-          onChange={setRate}
-        />
+        <Field label={stock === "diamond" ? "CT In" : "Gram In"}><NumInput decimals={4} value={toNum(qtyIn)} onChange={(n) => setQtyIn(String(n))} /></Field>
+        <Field label={stock === "diamond" ? "CT Out" : "Gram Out"}><NumInput decimals={4} value={toNum(qtyOut)} onChange={(n) => setQtyOut(String(n))} /></Field>
+        <Field label={stock === "diamond" ? "Rate/CT" : "Rate/Gram"}><NumInput decimals={4} value={toNum(rate)} onChange={(n) => setRate(String(n))} /></Field>
         <Field label="Reason (required)" className="sm:col-span-2">
           <Textarea
             value={reason}
             onChange={(e) => setReason(e.target.value)}
             rows={2}
             placeholder="Explain why this manual adjustment is needed"
+          />
+        </Field>
+      </div>
+    </ModalShell>
+  );
+}
+
+function EditStockModal({
+  open,
+  entry,
+  onClose,
+}: {
+  open: boolean;
+  entry: StockEntry | null;
+  onClose: () => void;
+}) {
+  const store = useLepdo();
+  const [description, setDescription] = useState("");
+  const [category, setCategory] = useState("");
+  const [karat, setKarat] = useState("");
+  const [colour, setColour] = useState("");
+  const [qtyIn, setQtyIn] = useState("0");
+  const [qtyOut, setQtyOut] = useState("0");
+  const [rate, setRate] = useState("0");
+  const [reason, setReason] = useState("");
+  const [loadedId, setLoadedId] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  if (entry && loadedId !== entry.id) {
+    setDescription(entry.description);
+    setCategory(entry.category ?? "");
+    setKarat(entry.karat ?? "");
+    setColour(entry.colour ?? "");
+    setQtyIn(String(entry.qtyIn ?? 0));
+    setQtyOut(String(entry.qtyOut ?? 0));
+    setRate(String(entry.rate ?? 0));
+    setReason("");
+    setLoadedId(entry.id);
+  }
+
+  if (!open || !entry) return null;
+
+  const handleClose = () => {
+    setLoadedId(null);
+    onClose();
+  };
+
+  const handleSave = () => {
+    if (saving) return;
+    if (!description.trim()) {
+      toast.error("Description is required.");
+      return;
+    }
+    if (!reason.trim()) {
+      toast.error("A reason is required for stock edits.");
+      return;
+    }
+    const inQty = Number(qtyIn) || 0;
+    const outQty = Number(qtyOut) || 0;
+    const auto = deriveAutoRows(store.purchaseBills, store.salesInvoices);
+    const prevQty = balanceBeforeEntry(store.stockEntries, auto, entry.stock, entry.id);
+    const newQty = round2(prevQty + inQty - outQty);
+    if (newQty < 0) {
+      toast.error(
+        `This change would make the running ${entry.stock} balance negative (${newQty}). Adjust the quantities before saving.`,
+      );
+      return;
+    }
+    setSaving(true);
+    try {
+      const record = store.stamp("stk", {
+        ...entry,
+        description: description.trim(),
+        category: entry.stock === "diamond" ? category || undefined : undefined,
+        karat: entry.stock === "gold" ? karat || undefined : undefined,
+        colour: entry.stock === "gold" ? colour || undefined : undefined,
+        qtyIn: inQty,
+        qtyOut: outQty,
+        rate: Number(rate) || 0,
+        reason: reason.trim(),
+        adjustment: true,
+        prevQty,
+        newQty,
+      });
+      store.saveRecord("stockEntries", record as StockEntry);
+      toast.success("Stock entry updated.");
+      handleClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      open={open}
+      onClose={handleClose}
+      title="Edit Stock Entry"
+      subtitle="Edits are audited with the previous and new balance."
+      footer={
+        <div className="flex justify-end gap-2">
+          <Button variant="outline" onClick={handleClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            className="bg-navy text-navy-foreground hover:bg-navy/90"
+          >
+            {saving ? "Saving…" : "Save Changes"}
+          </Button>
+        </div>
+      }
+    >
+      <div className="grid gap-3 p-4 sm:grid-cols-2">
+        <TextField
+          label="Description"
+          value={description}
+          onChange={setDescription}
+          className="sm:col-span-2"
+        />
+        {entry.stock === "diamond" ? (
+          <TextField label="Category" value={category} onChange={setCategory} />
+        ) : (
+          <>
+            <TextField label="KT" value={karat} onChange={setKarat} />
+            <TextField label="Colour" value={colour} onChange={setColour} />
+          </>
+        )}
+        <Field label={entry.stock === "diamond" ? "CT In" : "Gram In"}><NumInput decimals={4} value={toNum(qtyIn)} onChange={(n) => setQtyIn(String(n))} /></Field>
+        <Field label={entry.stock === "diamond" ? "CT Out" : "Gram Out"}><NumInput decimals={4} value={toNum(qtyOut)} onChange={(n) => setQtyOut(String(n))} /></Field>
+        <Field label={entry.stock === "diamond" ? "Rate/CT" : "Rate/Gram"}><NumInput decimals={4} value={toNum(rate)} onChange={(n) => setRate(String(n))} /></Field>
+        <Field label="Reason for change (required)" className="sm:col-span-2">
+          <Textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            placeholder="Explain why this stock entry is being edited"
           />
         </Field>
       </div>

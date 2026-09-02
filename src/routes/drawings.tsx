@@ -1,3 +1,4 @@
+import { isLedgerEntry, isPosted } from "@/lib/lepdo/entry";
 import { useEffect, useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -39,6 +40,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { formatDate, formatMoney, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo, type NewEntryInput } from "@/lib/lepdo/store";
 import type { SourceType, Transaction } from "@/lib/lepdo/types";
 import {
@@ -119,7 +121,11 @@ function DrawingsPage() {
     () => [
       ...store.bankAccounts
         .filter((b) => b.active)
-        .map((b) => ({ id: b.id, label: `${b.bankName} — ${b.nickname}`, type: "bank" as SourceType })),
+        .map((b) => ({
+          id: b.id,
+          label: `${b.bankName} — ${b.nickname}`,
+          type: "bank" as SourceType,
+        })),
       ...store.cashLocations
         .filter((c) => c.active)
         .map((c) => ({ id: c.id, label: c.name, type: "cash" as SourceType })),
@@ -132,12 +138,15 @@ function DrawingsPage() {
       .filter(
         (t) =>
           !t.voided &&
+          !isLedgerEntry(t) &&
           t.category === "owner_drawing" &&
           t.partyId === partyId &&
           t.date >= from &&
           t.date <= to,
       )
-      .sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : b.date.localeCompare(a.date)));
+      .sort((a, b) =>
+        a.date === b.date ? a.code.localeCompare(b.code) : b.date.localeCompare(a.date),
+      );
 
   const openAdd = () => {
     setEditing(null);
@@ -189,7 +198,9 @@ function DrawingsPage() {
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {DRAWING_ACCOUNTS.map((acc, i) => {
           const Icon = ICONS[i] ?? WalletCards;
-          const total = rowsFor(acc.id).reduce((s, t) => s + t.amount, 0);
+          const total = rowsFor(acc.id)
+            .filter(isPosted)
+            .reduce((s, t) => s + t.amount, 0);
           return (
             <div key={acc.id} className={cn("rounded-xl border border-border p-4", acc.bg)}>
               <div className="flex items-start justify-between gap-3">
@@ -206,7 +217,9 @@ function DrawingsPage() {
                 type="button"
                 onClick={() => {
                   setFocusAccount(acc.id);
-                  document.getElementById(`table-${acc.id}`)?.scrollIntoView({ behavior: "smooth", block: "start" });
+                  document
+                    .getElementById(`table-${acc.id}`)
+                    ?.scrollIntoView({ behavior: "smooth", block: "start" });
                 }}
                 className="mt-2 text-xs font-semibold text-navy underline underline-offset-4"
               >
@@ -231,7 +244,7 @@ function DrawingsPage() {
             <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-navy">{acc.name} Drawings</h2>
               <span className="num text-sm font-semibold text-navy">
-                {formatMoney(rows.reduce((s, t) => s + t.amount, 0))}
+                {formatMoney(rows.filter(isPosted).reduce((s, t) => s + t.amount, 0))}
               </span>
             </div>
 
@@ -248,6 +261,7 @@ function DrawingsPage() {
                       <th className="px-4 py-2 text-left font-semibold">Date</th>
                       <th className="px-4 py-2 text-left font-semibold">Category</th>
                       <th className="px-4 py-2 text-left font-semibold">Particulars</th>
+                      <th className="px-4 py-2 text-left font-semibold">Source &amp; Status</th>
                       <th className="px-4 py-2 text-right font-semibold">Amount</th>
                       <th className="w-10 px-2 py-2" aria-label="Actions" />
                     </tr>
@@ -255,9 +269,14 @@ function DrawingsPage() {
                   <tbody>
                     {rows.map((t) => (
                       <tr key={t.id} className="border-t border-border">
-                        <td className="whitespace-nowrap px-4 py-2 text-foreground">{formatDate(t.date)}</td>
-                        <td className="px-4 py-2 text-foreground">{t.drawingCategory ?? "Other"}</td>
+                        <td className="whitespace-nowrap px-4 py-2 text-foreground">
+                          {formatDate(t.date)}
+                        </td>
+                        <td className="px-4 py-2 text-foreground">
+                          {t.drawingCategory ?? "Other"}
+                        </td>
                         <td className="px-4 py-2 text-muted-foreground">{t.particulars}</td>
+                        <td className="max-w-[320px] px-4 py-2"></td>
                         <td className="num whitespace-nowrap px-4 py-2 text-right font-medium text-foreground">
                           {formatMoney(t.amount)}
                         </td>
@@ -333,17 +352,15 @@ function DrawingsPage() {
             <dl className="space-y-2 text-sm">
               {[
                 ["Date", formatDate(viewing.date)],
-                [
-                  "Account",
-                  DRAWING_ACCOUNTS.find((a) => a.id === viewing.partyId)?.name ?? "—",
-                ],
+                ["Account", DRAWING_ACCOUNTS.find((a) => a.id === viewing.partyId)?.name ?? "—"],
                 ["Category", viewing.drawingCategory ?? "Other"],
                 ["Particulars", viewing.particulars],
                 ["Amount", formatMoney(viewing.amount)],
                 [
                   "Payment source",
                   viewing.sourceType === "bank"
-                    ? (store.bankAccounts.find((b) => b.id === viewing.accountId)?.nickname ?? "Bank")
+                    ? (store.bankAccounts.find((b) => b.id === viewing.accountId)?.nickname ??
+                      "Bank")
                     : (store.cashLocations.find((c) => c.id === viewing.accountId)?.name ?? "Cash"),
                 ],
                 ["Notes", viewing.notes || "—"],
@@ -483,7 +500,9 @@ function DrawingForm({
     <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
       <DialogContent className="flex max-h-[90vh] max-w-lg flex-col gap-0 p-0">
         <DialogHeader className="border-b border-border px-5 py-4 text-left">
-          <DialogTitle className="text-navy">{editing ? "Edit Drawing" : "Add Drawing"}</DialogTitle>
+          <DialogTitle className="text-navy">
+            {editing ? "Edit Drawing" : "Add Drawing"}
+          </DialogTitle>
           <DialogDescription>
             Posts a linked debit entry in the selected bank ledger or cash book.
           </DialogDescription>
@@ -546,15 +565,7 @@ function DrawingForm({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label htmlFor="d-amt">Amount</Label>
-              <Input
-                id="d-amt"
-                type="number"
-                inputMode="decimal"
-                min="0"
-                value={form.amount}
-                onChange={(e) => set("amount", e.target.value)}
-                placeholder="0.00"
-              />
+              <MoneyInput id="d-amt" value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
             </div>
             <div className="space-y-1.5">
               <Label>Payment Source</Label>

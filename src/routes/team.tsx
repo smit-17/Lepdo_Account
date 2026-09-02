@@ -1,3 +1,4 @@
+import { isPosted } from "@/lib/lepdo/entry";
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
@@ -14,6 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { PageHeading } from "@/components/lepdo/bits";
+import { NumInput, MoneyInput } from "@/components/lepdo/numeric";
 import { useShell } from "@/components/lepdo/shell-context";
 import { useLepdo } from "@/lib/lepdo/store";
 import type { NewEntryInput } from "@/lib/lepdo/store";
@@ -93,6 +95,18 @@ function TeamPage() {
 
 /* ============================== Seller Performance ============================== */
 
+interface SellerInvoiceRow {
+  id: string;
+  number: string;
+  date: string;
+  customer: string;
+  total: number;
+  received: number;
+  pending: number;
+  incentivePercent: number | null;
+  incentiveAmount: number;
+}
+
 interface SellerRow {
   name: string;
   customers: number;
@@ -103,10 +117,13 @@ interface SellerRow {
   incentiveEarned: number;
   incentivePaid: number;
   incentivePending: number;
+  rateLabel: string;
+  invoiceRows: SellerInvoiceRow[];
 }
 
 function SellerPerformance() {
   const store = useLepdo();
+  const [viewSeller, setViewSeller] = useState<SellerRow | null>(null);
 
   if (!store.ready) return <EmptyState title="Loading seller performance…" />;
 
@@ -126,23 +143,51 @@ function SellerPerformance() {
       totalSales: number;
       received: number;
       pending: number;
+      incentiveEarned: number;
+      invoiceRows: SellerInvoiceRow[];
     }
   >();
   for (const v of model.invoices) {
     if (v.invoice.voided) continue;
     const name = v.invoice.sellerName?.trim() || "Unassigned";
+    const seller = store.sellers.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
     const g = groups.get(name) ?? {
       customers: new Set<string>(),
       invoices: 0,
       totalSales: 0,
       received: 0,
       pending: 0,
+      incentiveEarned: 0,
+      invoiceRows: [],
     };
+    let incentivePercent: number | null = null;
+    let incentiveAmount = 0;
+    if (v.invoice.sellerIncentivePercent != null) {
+      incentivePercent = v.invoice.sellerIncentivePercent;
+      incentiveAmount = round2((v.invoice.total * incentivePercent) / 100);
+    } else if (seller?.rateType === "percent" && seller.rate) {
+      incentivePercent = seller.rate;
+      incentiveAmount = round2((v.invoice.total * incentivePercent) / 100);
+    } else if (seller?.rateType === "fixed" && seller.rate) {
+      incentiveAmount = round2(seller.rate);
+    }
     g.customers.add(v.invoice.partyId);
     g.invoices += 1;
     g.totalSales += v.invoice.total;
     g.received += v.received;
     g.pending += v.pending;
+    g.incentiveEarned = round2(g.incentiveEarned + incentiveAmount);
+    g.invoiceRows.push({
+      id: v.invoice.id,
+      number: v.invoice.number,
+      date: v.invoice.date,
+      customer: store.parties.find((p) => p.id === v.invoice.partyId)?.name ?? "—",
+      total: v.invoice.total,
+      received: v.received,
+      pending: v.pending,
+      incentivePercent,
+      incentiveAmount,
+    });
     groups.set(name, g);
   }
 
@@ -151,14 +196,6 @@ function SellerPerformance() {
   const rows: SellerRow[] = [...groups.entries()]
     .map(([name, g]) => {
       const seller = store.sellers.find((s) => s.name.trim().toLowerCase() === name.toLowerCase());
-      let earned = 0;
-      if (seller) {
-        const rate = seller.rate ?? 0;
-        earned =
-          seller.rateType === "percent"
-            ? round2((g.totalSales * rate) / 100)
-            : round2(rate * g.invoices);
-      }
       const paid = round2(
         payments
           .filter((p) => {
@@ -167,6 +204,11 @@ function SellerPerformance() {
           })
           .reduce((s, p) => s + p.amount, 0),
       );
+      const rateLabel = seller?.rate
+        ? seller.rateType === "percent"
+          ? `${seller.rate}%`
+          : `${formatMoney(seller.rate)}/invoice`
+        : "—";
       return {
         name,
         customers: g.customers.size,
@@ -174,9 +216,11 @@ function SellerPerformance() {
         totalSales: round2(g.totalSales),
         received: round2(g.received),
         pending: round2(g.pending),
-        incentiveEarned: earned,
+        incentiveEarned: g.incentiveEarned,
         incentivePaid: paid,
-        incentivePending: round2(Math.max(earned - paid, 0)),
+        incentivePending: round2(Math.max(g.incentiveEarned - paid, 0)),
+        rateLabel,
+        invoiceRows: g.invoiceRows.sort((a, b) => (a.date < b.date ? 1 : -1)),
       };
     })
     .sort((a, b) => b.totalSales - a.totalSales);
@@ -219,7 +263,7 @@ function SellerPerformance() {
         { key: "incentivePaid", label: "Incentive Paid", money: true },
         { key: "incentivePending", label: "Incentive Pending", money: true },
       ],
-      rows: rows.map((r) => ({ ...r })),
+      rows: rows.map(({ invoiceRows: _ignored, ...r }) => ({ ...r })),
       summary: [
         { label: "Total Sales", value: formatMoney(totals.totalSales) },
         { label: "Total Incentive Earned", value: formatMoney(totals.earned) },
@@ -238,13 +282,22 @@ function SellerPerformance() {
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {rows.map((r) => (
-            <SectionCard key={r.name} title={r.name}>
+            <SectionCard
+              key={r.name}
+              title={r.name}
+              actions={
+                <Button variant="outline" size="sm" onClick={() => setViewSeller(r)}>
+                  View Seller Sales
+                </Button>
+              }
+            >
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <Row label="Customers" value={String(r.customers)} />
                 <Row label="Invoices" value={String(r.invoices)} />
                 <Row label="Total Sales" value={formatMoney(r.totalSales)} />
                 <Row label="Received" value={formatMoney(r.received)} />
                 <Row label="Pending" value={formatMoney(r.pending)} />
+                <Row label="Incentive %" value={r.rateLabel} />
                 <Row label="Incentive Earned" value={formatMoney(r.incentiveEarned)} />
                 <Row label="Incentive Paid" value={formatMoney(r.incentivePaid)} />
                 <Row label="Incentive Pending" value={formatMoney(r.incentivePending)} />
@@ -271,6 +324,7 @@ function SellerPerformance() {
                 <th className="py-2 pr-2 text-right">Incentive Earned</th>
                 <th className="py-2 pr-2 text-right">Incentive Paid</th>
                 <th className="py-2 pr-2 text-right">Incentive Pending</th>
+                <th className="py-2 pr-2" />
               </tr>
             </thead>
             <tbody>
@@ -285,6 +339,11 @@ function SellerPerformance() {
                   <td className="num py-2 pr-2 text-right">{formatMoney(r.incentiveEarned)}</td>
                   <td className="num py-2 pr-2 text-right">{formatMoney(r.incentivePaid)}</td>
                   <td className="num py-2 pr-2 text-right">{formatMoney(r.incentivePending)}</td>
+                  <td className="py-2 pr-2 text-right">
+                    <Button variant="outline" size="sm" onClick={() => setViewSeller(r)}>
+                      View
+                    </Button>
+                  </td>
                 </tr>
               ))}
             </tbody>
@@ -292,7 +351,12 @@ function SellerPerformance() {
           <div className="space-y-2 sm:hidden">
             {rows.map((r) => (
               <div key={r.name} className="rounded-lg border border-border p-3 text-xs">
-                <p className="mb-1 font-semibold">{r.name}</p>
+                <div className="mb-1 flex items-center justify-between">
+                  <p className="font-semibold">{r.name}</p>
+                  <Button variant="outline" size="sm" onClick={() => setViewSeller(r)}>
+                    View
+                  </Button>
+                </div>
                 <Row label="Customers" value={String(r.customers)} />
                 <Row label="Invoices" value={String(r.invoices)} />
                 <Row label="Total Sales" value={formatMoney(r.totalSales)} />
@@ -306,6 +370,58 @@ function SellerPerformance() {
           </div>
         </div>
       </SectionCard>
+
+      {viewSeller ? (
+        <ModalShell
+          open
+          onClose={() => setViewSeller(null)}
+          title={`${viewSeller.name} — Invoices`}
+          subtitle={`${viewSeller.invoices} invoice(s) · Total sales ${formatMoney(viewSeller.totalSales)}`}
+          width="max-w-[860px]"
+          footer={
+            <Button variant="outline" onClick={() => setViewSeller(null)}>
+              Close
+            </Button>
+          }
+        >
+          {viewSeller.invoiceRows.length === 0 ? (
+            <EmptyState title="No invoices for this seller" />
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[720px] text-sm">
+                <thead>
+                  <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                    <th className="py-2 pr-2">Date</th>
+                    <th className="py-2 pr-2">Invoice #</th>
+                    <th className="py-2 pr-2">Customer</th>
+                    <th className="py-2 pr-2 text-right">Total</th>
+                    <th className="py-2 pr-2 text-right">Received</th>
+                    <th className="py-2 pr-2 text-right">Pending</th>
+                    <th className="py-2 pr-2 text-right">Incentive %</th>
+                    <th className="py-2 pr-2 text-right">Incentive Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {viewSeller.invoiceRows.map((inv) => (
+                    <tr key={inv.id} className="border-b border-border/60">
+                      <td className="py-2 pr-2">{inv.date}</td>
+                      <td className="py-2 pr-2 font-medium">{inv.number}</td>
+                      <td className="py-2 pr-2">{inv.customer}</td>
+                      <td className="num py-2 pr-2 text-right">{formatMoney(inv.total)}</td>
+                      <td className="num py-2 pr-2 text-right">{formatMoney(inv.received)}</td>
+                      <td className="num py-2 pr-2 text-right">{formatMoney(inv.pending)}</td>
+                      <td className="num py-2 pr-2 text-right">
+                        {inv.incentivePercent != null ? `${inv.incentivePercent}%` : "—"}
+                      </td>
+                      <td className="num py-2 pr-2 text-right">{formatMoney(inv.incentiveAmount)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </ModalShell>
+      ) : null}
     </div>
   );
 }
@@ -342,7 +458,7 @@ function TeamSalary() {
   }
 
   function resolveTx(reference: string) {
-    return store.transactions.find((t) => t.reference === reference && !t.voided);
+    return store.transactions.find((t) => t.reference === reference && isPosted(t));
   }
 
   function buildExport(): ExportTable {
@@ -603,11 +719,11 @@ function MemberModal({ member, onClose }: { member: TeamMember | null; onClose: 
   const store = useLepdo();
   const [name, setName] = useState(member?.name ?? "");
   const [role, setRole] = useState(member?.role ?? "");
-  const [salary, setSalary] = useState(String(member?.monthlySalary ?? ""));
+  const [salary, setSalary] = useState(member?.monthlySalary ?? 0);
   const [incentiveType, setIncentiveType] = useState<"percent" | "fixed">(
     member?.incentiveType ?? "percent",
   );
-  const [incentiveRate, setIncentiveRate] = useState(String(member?.incentiveRate ?? ""));
+  const [incentiveRate, setIncentiveRate] = useState(member?.incentiveRate ?? 0);
   const [active, setActive] = useState(member?.active ?? true);
   const [saving, setSaving] = useState(false);
 
@@ -631,9 +747,9 @@ function MemberModal({ member, onClose }: { member: TeamMember | null; onClose: 
         id: member?.id,
         name: trimmed,
         role: role.trim(),
-        monthlySalary: round2(Number(salary) || 0),
+        monthlySalary: round2(salary || 0),
         incentiveType,
-        incentiveRate: round2(Number(incentiveRate) || 0),
+        incentiveRate: round2(incentiveRate || 0),
         active,
       } as Omit<TeamMember, "createdAt" | "createdBy" | "updatedAt" | "updatedBy">);
       store.saveRecord("teamMembers", record as TeamMember);
@@ -668,12 +784,7 @@ function MemberModal({ member, onClose }: { member: TeamMember | null; onClose: 
           <Input className="h-9" value={role} onChange={(e) => setRole(e.target.value)} />
         </Field>
         <Field label="Monthly Salary">
-          <Input
-            className="h-9"
-            type="number"
-            value={salary}
-            onChange={(e) => setSalary(e.target.value)}
-          />
+          <MoneyInput className="h-9" value={salary} onChange={setSalary} />
         </Field>
         <Field label="Incentive Type">
           <Select
@@ -690,12 +801,7 @@ function MemberModal({ member, onClose }: { member: TeamMember | null; onClose: 
           </Select>
         </Field>
         <Field label="Incentive Rate">
-          <Input
-            className="h-9"
-            type="number"
-            value={incentiveRate}
-            onChange={(e) => setIncentiveRate(e.target.value)}
-          />
+          <NumInput className="h-9" decimals={4} value={incentiveRate} onChange={setIncentiveRate} />
         </Field>
         <Field label="Active">
           <div className="flex h-9 items-center gap-2">
@@ -717,7 +823,7 @@ function PaymentModal({ payment, onClose }: { payment: TeamPayment | null; onClo
   const [type, setType] = useState<TeamPaymentType>(payment?.type ?? "salary");
   const [month, setMonth] = useState(payment?.month ?? todayISO().slice(0, 7));
   const [particulars, setParticulars] = useState(payment?.particulars ?? "");
-  const [amount, setAmount] = useState(String(payment?.amount ?? ""));
+  const [amount, setAmount] = useState(payment?.amount ?? 0);
   const [paid, setPaid] = useState(payment?.paid ?? true);
   const [sourceType, setSourceType] = useState<"bank" | "cash">("bank");
   const [sourceId, setSourceId] = useState(store.bankAccounts[0]?.id ?? "");
@@ -732,7 +838,7 @@ function PaymentModal({ payment, onClose }: { payment: TeamPayment | null; onClo
       toast.error("Select a team member.");
       return;
     }
-    const amt = round2(Number(amount) || 0);
+    const amt = round2(amount || 0);
     if (amt <= 0) {
       toast.error("Enter a valid amount.");
       return;
@@ -865,12 +971,7 @@ function PaymentModal({ payment, onClose }: { payment: TeamPayment | null; onClo
           />
         </Field>
         <Field label="Amount">
-          <Input
-            className="h-9"
-            type="number"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
-          />
+          <MoneyInput className="h-9" value={amount} onChange={setAmount} />
         </Field>
         <Field label="Paid">
           <div className="flex h-9 items-center gap-2">

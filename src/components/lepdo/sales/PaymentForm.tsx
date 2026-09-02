@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDate, formatMoney, round2, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo } from "@/lib/lepdo/store";
 import { FormField, MODAL_CLASS } from "./ui";
 
@@ -54,7 +55,6 @@ export function PaymentForm({
       notes: "",
     });
     setAlloc({});
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, presetCustomerId]);
 
   const customers = store.parties.filter((p) => p.type === "customer" || p.type === "other");
@@ -73,9 +73,7 @@ export function PaymentForm({
   );
 
   const amount = round2(Number(form.amount) || 0);
-  const allocated = round2(
-    Object.values(alloc).reduce((s, v) => s + (Number(v) || 0), 0),
-  );
+  const allocated = round2(Object.values(alloc).reduce((s, v) => s + (Number(v) || 0), 0));
   const unallocated = round2(Math.max(0, amount - allocated));
 
   function autoAllocate() {
@@ -93,20 +91,19 @@ export function PaymentForm({
 
   function submit() {
     if (saving) return;
-    const error =
-      !form.partyId
-        ? "Select the customer."
-        : !(amount > 0)
-          ? "Amount must be greater than zero."
-          : !form.account
-            ? "Select the bank or cash account."
-            : allocated > amount
-              ? "Allocation cannot exceed the payment amount."
-              : (openInvoices.find(
+    const error = !form.partyId
+      ? "Select the customer."
+      : !(amount > 0)
+        ? "Amount must be greater than zero."
+        : !form.account
+          ? "Select the bank or cash account."
+          : allocated > amount
+            ? "Allocation cannot exceed the payment amount."
+            : openInvoices.find(
                   (inv) => round2(Number(alloc[inv.id]) || 0) > round2(inv.total - inv.paid),
                 )
-                  ? "An allocation exceeds that invoice's pending amount."
-                  : null);
+              ? "An allocation exceeds that invoice's pending amount."
+              : null;
     if (error) {
       toast.error(error);
       return;
@@ -128,7 +125,9 @@ export function PaymentForm({
         .filter((a) => a.amount > 0),
     };
     if (store.isLikelyDuplicate(entry)) {
-      toast.error("A matching receipt already exists for this date, account, amount and reference.");
+      toast.error(
+        "A matching receipt already exists for this date, account, amount and reference.",
+      );
       return;
     }
     setSaving(true);
@@ -138,7 +137,11 @@ export function PaymentForm({
       setSaving(false);
       return;
     }
-    toast.success(unallocated > 0 ? `Payment saved · ${formatMoney(unallocated)} kept as advance.` : "Payment saved.");
+    toast.success(
+      unallocated > 0
+        ? `Payment saved · ${formatMoney(unallocated)} kept as advance.`
+        : "Payment saved.",
+    );
     onClose();
   }
 
@@ -155,7 +158,11 @@ export function PaymentForm({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-5 py-5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormField label="Date" required>
-              <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+              <Input
+                type="date"
+                value={form.date}
+                onChange={(e) => setForm({ ...form, date: e.target.value })}
+              />
             </FormField>
             <FormField label="Customer" required>
               <Select
@@ -178,11 +185,7 @@ export function PaymentForm({
               </Select>
             </FormField>
             <FormField label="Amount" required>
-              <Input
-                inputMode="decimal"
-                value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-              />
+              <MoneyInput value={toNum(form.amount)} onChange={(n) => setForm({ ...form, amount: String(n) })} />
             </FormField>
             <FormField label="Bank / cash account" required>
               <Select value={form.account} onValueChange={(v) => setForm({ ...form, account: v })}>
@@ -199,10 +202,17 @@ export function PaymentForm({
               </Select>
             </FormField>
             <FormField label="Reference / UTR">
-              <Input value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
+              <Input
+                value={form.reference}
+                onChange={(e) => setForm({ ...form, reference: e.target.value })}
+              />
             </FormField>
             <FormField label="Notes (optional)">
-              <Textarea rows={1} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              <Textarea
+                rows={1}
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              />
             </FormField>
           </div>
 
@@ -220,7 +230,9 @@ export function PaymentForm({
               </Button>
             </div>
             {!form.partyId ? (
-              <p className="mt-2 text-sm text-muted-foreground">Select a customer to see open invoices.</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Select a customer to see open invoices.
+              </p>
             ) : !openInvoices.length ? (
               <p className="mt-2 text-sm text-muted-foreground">
                 No open invoices — the full amount will be kept as customer advance.
@@ -240,13 +252,7 @@ export function PaymentForm({
                           {formatDate(inv.date)} · Pending {formatMoney(due)}
                         </p>
                       </div>
-                      <Input
-                        className="h-9"
-                        inputMode="decimal"
-                        placeholder="0"
-                        value={alloc[inv.id] ?? ""}
-                        onChange={(e) => setAlloc({ ...alloc, [inv.id]: e.target.value })}
-                      />
+                      <MoneyInput className="h-9" value={toNum(alloc[inv.id])} onChange={(n) => setAlloc({ ...alloc, [inv.id]: String(n) })} />
                     </div>
                   );
                 })}

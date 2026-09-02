@@ -3,14 +3,14 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
 import { STATUS_CLASS, STATUS_LABEL, type InvoiceStatus } from "@/lib/lepdo/sales";
-
+import { SearchSelect } from "@/components/lepdo/shared";
 
 export const MODAL_CLASS =
   "flex w-[calc(100vw-1rem)] max-w-[880px] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:w-full " +
   "max-h-[85vh] max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none";
 
 export const WIDE_MODAL_CLASS =
-  "flex w-[calc(100vw-1rem)] max-w-[1000px] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:w-full " +
+  "flex w-[calc(100vw-1rem)] max-w-[1320px] flex-col gap-0 overflow-hidden rounded-xl p-0 sm:w-full " +
   "max-h-[90vh] max-sm:h-dvh max-sm:max-h-dvh max-sm:w-screen max-sm:max-w-none max-sm:rounded-none";
 
 export const TONE: Record<string, string> = {
@@ -24,18 +24,6 @@ export const TONE: Record<string, string> = {
   purchase: "bg-pu-total-bg text-pu-total",
   supplier: "bg-pu-supplier-bg text-pu-supplier",
 };
-
-export const SALE_TYPES: { id: "ue" | "ui" | "export" | "gst_inr"; label: string }[] = [
-  { id: "ue", label: "UE" },
-  { id: "ui", label: "UI" },
-  { id: "export", label: "Export" },
-  { id: "gst_inr", label: "GST INR" },
-];
-
-export const CURRENCIES = ["INR", "USD", "EUR", "GBP", "CAD", "AUD", "AED"];
-export const KARATS = ["9KT", "10KT", "14KT", "18KT", "22KT", "24KT", "925 Silver", "950 Platinum"];
-export const METAL_COLOURS = ["Yellow", "White", "Rose", "Two Tone", "Silver", "Platinum"];
-export const STONE_TYPES = ["Lab Grown Diamond", "Moissanite", "Gemstone", "CZ", "Other"];
 
 export function Stat({
   label,
@@ -137,7 +125,6 @@ export function Combo({
   options,
   placeholder,
   className,
-  inputMode,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -146,30 +133,26 @@ export function Combo({
   className?: string;
   inputMode?: "text" | "decimal";
 }) {
-  const id = useId();
   return (
-    <>
-      <Input
-        list={id}
-        className={className}
-        inputMode={inputMode ?? "text"}
-        placeholder={placeholder ?? "Select or type a new value"}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-      />
-      <datalist id={id}>
-        {options.map((o) => (
-          <option key={o} value={o} />
-        ))}
-      </datalist>
-    </>
+    <SearchSelect
+      value={value}
+      options={options}
+      onChange={onChange}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(className !== undefined ? { className } : {})}
+    />
   );
 }
 
 /** Permanent column title for item tables (hidden on mobile where cards use per-field labels). */
 export function ColHead({ label, className }: { label: string; className?: string }) {
   return (
-    <span className={cn("text-[11px] font-semibold uppercase tracking-wide text-muted-foreground", className)}>
+    <span
+      className={cn(
+        "text-[11px] font-semibold uppercase tracking-wide text-muted-foreground",
+        className,
+      )}
+    >
       {label}
     </span>
   );
@@ -177,5 +160,9 @@ export function ColHead({ label, className }: { label: string; className?: strin
 
 /** Field label shown above an input inside a mobile item card. */
 export function CellLabel({ label }: { label: string }) {
-  return <span className="mb-1 block text-[11px] font-medium text-muted-foreground sm:hidden">{label}</span>;
+  return (
+    <span className="mb-1 block text-[11px] font-medium text-muted-foreground sm:hidden">
+      {label}
+    </span>
+  );
 }

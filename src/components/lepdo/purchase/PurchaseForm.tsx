@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Copy, Pencil, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronDown, ChevronsUpDown, Copy, Pencil, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -12,33 +12,62 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 import { formatMoney, round2, todayISO, uid } from "@/lib/lepdo/format";
 import { addDays } from "@/lib/lepdo/purchase";
 import { downloadBillPdf } from "@/lib/lepdo/purchaseReport";
 import { useLepdo } from "@/lib/lepdo/store";
-import type { InvoiceLine, MakingLine } from "@/lib/lepdo/types";
+import { masterOptions } from "@/lib/lepdo/masters";
+import type {
+  DiscountMode,
+  Invoice,
+  InvoiceLine,
+  MakingLine,
+  Party,
+  PurchaseType,
+  SupplyLocation,
+} from "@/lib/lepdo/types";
 import {
   CellLabel,
   ColHead,
-  Combo,
   FormField,
   WIDE_MODAL_CLASS,
 } from "@/components/lepdo/sales/ui";
+import { MasterCombo } from "@/components/lepdo/shared";
 import { ContactPicker } from "@/components/lepdo/ContactPicker";
+import { SupplierForm } from "@/components/lepdo/purchase/SupplierForm";
+import { AutoManual, ManualBadge, MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 
 type BillKind = "diamond" | "jewelry_making";
 type PayMode = "pending" | "paid" | "part" | "advance";
+
+/** A calculated amount that can be manually overridden, with a required reason when manual. */
+interface Override {
+  manual: number | undefined;
+  reason: string;
+}
+const emptyOverride = (): Override => ({ manual: undefined, reason: "" });
 
 const emptyLine = (): InvoiceLine => ({
   id: uid("ln"),
   description: "",
   quantity: 1,
+  pcs: 1,
   carat: 0,
   rate: 0,
   rateUsd: 0,
@@ -47,22 +76,164 @@ const emptyLine = (): InvoiceLine => ({
 const emptyMaking = (): MakingLine => ({
   id: uid("mk"),
   description: "",
-  quantity: 1,
+  quantity: 0,
   grossWeight: 0,
   netWeight: 0,
   diamondWeight: 0,
   makingRate: 0,
   total: 0,
+  sku: undefined,
+  stoneWeight: undefined,
+  stoneAmount: undefined,
+  makingRatePerGram: undefined,
+  totalMaking: undefined,
 });
 
-const n = (v: string | number | undefined) => Number(v) || 0;
+const n = toNum;
+
+/** Searchable supplier dropdown with inline add / edit — mirrors ContactPicker for parties. */
+function SupplierPicker({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  const store = useLepdo();
+  const [open, setOpen] = useState(false);
+  const [formOpen, setFormOpen] = useState(false);
+  const [editId, setEditId] = useState<string | null>(null);
+  const suppliers = store.parties.filter((p) => p.type === "supplier" || p.type === "other");
+  const selected = suppliers.find((p) => p.id === value);
+
+  return (
+    <>
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              role="combobox"
+              className="h-10 min-w-0 justify-between font-normal"
+            >
+              <span className={cn("truncate", !selected && "text-muted-foreground")}>
+                {selected?.name || "Select or search supplier"}
+              </span>
+              <ChevronsUpDown className="ml-1 size-4 shrink-0 opacity-50" />
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent align="start" className="w-[min(320px,calc(100vw-2rem))] p-0">
+            <Command>
+              <CommandInput placeholder="Type to search supplier" />
+              <CommandList>
+                <CommandEmpty>No supplier found.</CommandEmpty>
+                <CommandGroup heading="Suppliers">
+                  {suppliers.map((p: Party) => (
+                    <CommandItem
+                      key={p.id}
+                      value={p.name}
+                      onSelect={() => {
+                        onChange(p.id);
+                        setOpen(false);
+                      }}
+                    >
+                      <Check
+                        className={cn("mr-2 size-4", p.id === value ? "opacity-100" : "opacity-0")}
+                      />
+                      <span className="min-w-0 truncate">{p.name}</span>
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+                <CommandGroup>
+                  <CommandItem
+                    value="__add_supplier"
+                    onSelect={() => {
+                      setOpen(false);
+                      setEditId(null);
+                      setFormOpen(true);
+                    }}
+                  >
+                    <Plus className="mr-2 size-4" /> Add Supplier
+                  </CommandItem>
+                </CommandGroup>
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          title="Add supplier"
+          onClick={() => {
+            setEditId(null);
+            setFormOpen(true);
+          }}
+        >
+          <Plus className="size-4" />
+        </Button>
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          title="Edit supplier"
+          disabled={!value}
+          onClick={() => {
+            if (!value) return;
+            setEditId(value);
+            setFormOpen(true);
+          }}
+        >
+          <Pencil className="size-4" />
+        </Button>
+      </div>
+      <SupplierForm
+        open={formOpen}
+        supplierId={editId}
+        onClose={() => setFormOpen(false)}
+        onSaved={(id) => onChange(id)}
+      />
+    </>
+  );
+}
+
+/** Compact action buttons shown on every item row (desktop + mobile). */
+function RowActions({
+  expanded,
+  onToggle,
+  onCopy,
+  onDelete,
+}: {
+  expanded: boolean;
+  onToggle: () => void;
+  onCopy: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-0.5">
+      <Button type="button" size="icon" variant="ghost" title="Edit" className="sm:hidden" onClick={onToggle}>
+        <ChevronDown className={cn("h-4 w-4 transition-transform", expanded && "rotate-180")} />
+      </Button>
+      <Button type="button" size="icon" variant="ghost" title="Edit" className="hidden sm:inline-flex" onClick={onToggle}>
+        <Pencil className="h-4 w-4" />
+      </Button>
+      <Button type="button" size="icon" variant="ghost" title="Copy this item" onClick={onCopy}>
+        <Copy className="h-4 w-4" />
+      </Button>
+      <Button type="button" size="icon" variant="ghost" title="Delete item" onClick={onDelete}>
+        <Trash2 className="h-4 w-4 text-neg" />
+      </Button>
+    </div>
+  );
+}
 
 export function PurchaseForm({
   open,
   billId,
   onClose,
-  onAddSupplier,
-  onEditSupplier,
+  onAddSupplier: _onAddSupplier,
+  onEditSupplier: _onEditSupplier,
 }: {
   open: boolean;
   billId: string | null;
@@ -73,25 +244,57 @@ export function PurchaseForm({
   const store = useLepdo();
   const editing = billId ? store.purchaseBills.find((b) => b.id === billId) : undefined;
 
+  const purchaseTypeOptions = masterOptions(store.masters, "purchaseTypes");
+  const purchaseTypeId = (label: string): PurchaseType => {
+    const l = label.toLowerCase();
+    if (l.includes("non")) return "non_gst";
+    if (l.includes("import")) return "import";
+    return "gst";
+  };
+  const taxSlabOptions = masterOptions(store.masters, "taxSlabs");
+
   const [kind, setKind] = useState<BillKind>("diamond");
   const [head, setHead] = useState({
     number: "",
     date: todayISO(),
-    termsDays: "30",
-    dueDate: addDays(todayISO(), 30),
+    dueDays: 0,
     partyId: "",
     broker: "",
     supplierInvoiceNumber: "",
-    usdRate: "",
+    usdRate: 0,
     notes: "",
+    purchaseType: "non_gst" as PurchaseType,
+    supplyLocation: "inside" as SupplyLocation,
+    taxSlab: "0",
+    discountMode: "fixed" as DiscountMode,
+    discountValue: 0,
   });
   const [lines, setLines] = useState<InvoiceLine[]>([emptyLine()]);
   const [making, setMaking] = useState<MakingLine[]>([emptyMaking()]);
   const [payMode, setPayMode] = useState<PayMode>("pending");
-  const [pay, setPay] = useState({ amount: "", date: todayISO(), account: "", reference: "" });
+  const [pay, setPay] = useState({
+    amount: 0,
+    date: todayISO(),
+    account: "",
+    reference: "",
+    method: "",
+  });
   const [saving, setSaving] = useState(false);
 
-  const suppliers = store.parties.filter((p) => p.type === "supplier" || p.type === "other");
+  // Manual overrides — row totals + summary amounts.
+  const [lineOv, setLineOv] = useState<Record<string, Override>>({});
+  const [makingOv, setMakingOv] = useState<Record<string, Override>>({});
+  const [subtotalOv, setSubtotalOv] = useState<Override>(emptyOverride());
+  const [discountOv, setDiscountOv] = useState<Override>(emptyOverride());
+  const [shippingOv, setShippingOv] = useState<Override>(emptyOverride());
+  const [roundOffOv, setRoundOffOv] = useState<Override>(emptyOverride());
+  const [grandOv, setGrandOv] = useState<Override>(emptyOverride());
+  const [paidOv, setPaidOv] = useState<Override>(emptyOverride());
+
+  // Mobile collapsible-card expand state, keyed by row id.
+  const [expandedRows, setExpandedRows] = useState<Record<string, boolean>>({});
+  const toggleRow = (id: string) => setExpandedRows((p) => ({ ...p, [id]: !p[id] }));
+
   const accounts = [
     ...store.bankAccounts
       .filter((b) => b.active)
@@ -100,34 +303,41 @@ export function PurchaseForm({
       .filter((c) => c.active)
       .map((c) => ({ value: `cash:${c.id}`, label: `${c.name} Cash` })),
   ];
-  const descriptions = [
-    ...new Set(
-      store.purchaseBills
-        .flatMap((b) => [...(b.lines ?? []), ...(b.makingLines ?? [])])
-        .map((l) => l.description.trim())
-        .filter(Boolean),
-    ),
-  ];
-
   useEffect(() => {
     if (!open) return;
     setSaving(false);
     setPayMode("pending");
-    setPay({ amount: "", date: todayISO(), account: "", reference: "" });
+    setPay({ amount: 0, date: todayISO(), account: "", reference: "", method: "" });
+    setLineOv({});
+    setMakingOv({});
+    setSubtotalOv(emptyOverride());
+    setDiscountOv(emptyOverride());
+    setShippingOv(emptyOverride());
+    setGrandOv(emptyOverride());
+    setPaidOv(emptyOverride());
+    setExpandedRows({});
     if (editing) {
-      setKind((editing.billKind ?? "diamond") as BillKind);
+      setKind(((editing.billKind === "jewelry_making" ? "jewelry_making" : "diamond")) as BillKind);
       setHead({
         number: editing.number,
         date: editing.date,
-        termsDays: String(editing.paymentTermsDays ?? 30),
-        dueDate: editing.dueDate ?? addDays(editing.date, editing.paymentTermsDays ?? 30),
+        dueDays: editing.dueDays ?? 0,
         partyId: editing.partyId,
         broker: editing.brokerName ?? "",
         supplierInvoiceNumber: editing.supplierInvoiceNumber ?? "",
-        usdRate: editing.usdRate ? String(editing.usdRate) : "",
+        usdRate: editing.usdRate ?? 0,
         notes: editing.notes ?? "",
+        purchaseType: editing.purchaseType ?? "non_gst",
+        supplyLocation: editing.supplyLocation ?? "inside",
+        taxSlab: editing.igstAmount ? "" : "0",
+        discountMode: editing.discountMode ?? "fixed",
+        discountValue: editing.discountValue ?? 0,
       });
-      setLines((editing.lines ?? []).length ? [...(editing.lines ?? [])] : [emptyLine()]);
+      setLines(
+        (editing.lines ?? []).length
+          ? (editing.lines ?? []).map((l) => ({ ...l, pcs: l.pcs ?? 1 }))
+          : [emptyLine()],
+      );
       setMaking(
         (editing.makingLines ?? []).length ? [...(editing.makingLines ?? [])] : [emptyMaking()],
       );
@@ -136,13 +346,17 @@ export function PurchaseForm({
       setHead({
         number: store.nextPurchaseBillNumber(),
         date: todayISO(),
-        termsDays: "30",
-        dueDate: addDays(todayISO(), 30),
+        dueDays: 0,
         partyId: "",
         broker: "",
         supplierInvoiceNumber: "",
-        usdRate: "",
+        usdRate: 0,
         notes: "",
+        purchaseType: "non_gst",
+        supplyLocation: "inside",
+        taxSlab: "0",
+        discountMode: "fixed",
+        discountValue: 0,
       });
       setLines([emptyLine()]);
       setMaking([emptyMaking()]);
@@ -150,46 +364,126 @@ export function PurchaseForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, billId]);
 
-  const usdRate = n(head.usdRate);
+  const usdRate = head.usdRate;
+  const isGst = head.purchaseType === "gst";
 
   const diamondRows = useMemo(
     () =>
       lines.map((l) => {
         const inr = round2(n(l.rateUsd) > 0 && usdRate > 0 ? n(l.rateUsd) * usdRate : n(l.rate));
-        return { line: l, inr, total: round2(n(l.carat) * inr) };
+        const auto = round2(n(l.carat) * inr);
+        const ov = lineOv[l.id];
+        const total = ov?.manual !== undefined ? round2(ov.manual) : auto;
+        return { line: l, inr, auto, total };
       }),
-    [lines, usdRate],
+    [lines, usdRate, lineOv],
   );
   const makingRows = useMemo(
-    () => making.map((m) => ({ line: m, total: round2(n(m.netWeight) * n(m.makingRate)) })),
-    [making],
+    () =>
+      making.map((m) => {
+        const perGram = n(m.makingRatePerGram) || n(m.makingRate);
+        const totalMaking =
+          n(m.totalMaking) > 0 ? round2(n(m.totalMaking)) : round2(n(m.netWeight) * perGram);
+        const auto = round2(totalMaking + n(m.stoneAmount));
+        const ov = makingOv[m.id];
+        const total = ov?.manual !== undefined ? round2(ov.manual) : auto;
+        return { line: m, perGram, totalMaking, auto, total };
+      }),
+    [making, makingOv],
   );
 
-  const grandTotal = round2(
+  const totalCt = round2(diamondRows.reduce((s, r) => s + n(r.line.carat), 0));
+  const subtotalAuto = round2(
     kind === "diamond"
       ? diamondRows.reduce((s, r) => s + r.total, 0)
       : makingRows.reduce((s, r) => s + r.total, 0),
   );
+  const subtotal = subtotalOv.manual !== undefined ? round2(subtotalOv.manual) : subtotalAuto;
 
-  const payAmount = round2(
-    payMode === "paid" ? grandTotal : payMode === "pending" ? 0 : n(pay.amount),
+  const discountValue = head.discountValue;
+  const discountAuto = round2(
+    head.discountMode === "percent" ? (subtotal * discountValue) / 100 : discountValue,
   );
+  const discountAmount = discountOv.manual !== undefined ? round2(discountOv.manual) : discountAuto;
+  const shippingAmount = shippingOv.manual !== undefined ? round2(shippingOv.manual) : 0;
+  const roundOffAmount = roundOffOv.manual !== undefined ? round2(roundOffOv.manual) : 0;
+  const taxableAmount = round2(Math.max(0, subtotal - discountAmount));
+  const taxRate = n(head.taxSlab);
+  const cgstAmount = isGst && head.supplyLocation === "inside" ? round2((taxableAmount * taxRate) / 200) : 0;
+  const sgstAmount = cgstAmount;
+  const igstAmount = isGst && head.supplyLocation === "outside" ? round2((taxableAmount * taxRate) / 100) : 0;
+  const grandTotalAuto = round2(
+    taxableAmount + cgstAmount + sgstAmount + igstAmount + shippingAmount + roundOffAmount,
+  );
+  const grandTotal = grandOv.manual !== undefined ? round2(grandOv.manual) : grandTotalAuto;
+
+  const payAmountAuto = round2(
+    payMode === "paid" ? grandTotal : payMode === "pending" ? 0 : pay.amount,
+  );
+  const payAmount = paidOv.manual !== undefined ? round2(paidOv.manual) : payAmountAuto;
   const allocatedNow = round2(Math.min(payAmount, grandTotal));
   const advanceNow = round2(Math.max(0, payAmount - grandTotal));
   const pendingNow = round2(Math.max(0, grandTotal - allocatedNow));
 
-  function setDate(date: string) {
-    setHead((h) => ({ ...h, date, dueDate: addDays(date, n(h.termsDays)) }));
-  }
-  function setTerms(days: string) {
-    setHead((h) => ({ ...h, termsDays: days, dueDate: addDays(h.date, n(days)) }));
-  }
+  const dueDaysNum = head.dueDays;
+  const hasDueDays = Number.isFinite(dueDaysNum) && dueDaysNum > 0;
+  const fullyPaidSameDay =
+    payMode !== "pending" && allocatedNow >= grandTotal && pay.date === head.date;
+  const dueDate =
+    hasDueDays && !fullyPaidSameDay ? addDays(head.date, dueDaysNum) : head.date;
 
   function patchLine(id: string, patch: Partial<InvoiceLine>) {
     setLines((prev) => prev.map((l) => (l.id === id ? { ...l, ...patch } : l)));
   }
   function patchMaking(id: string, patch: Partial<MakingLine>) {
     setMaking((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  }
+
+  // Collect every active manual override so we can require a reason and log it.
+  const activeOverrides = useMemo(() => {
+    const list: { label: string; ov: Override; auto: number }[] = [];
+    diamondRows.forEach((r, i) => {
+      const ov = lineOv[r.line.id];
+      if (ov?.manual !== undefined) list.push({ label: `Row ${i + 1} total`, ov, auto: r.auto });
+    });
+    if (subtotalOv.manual !== undefined) list.push({ label: "Subtotal", ov: subtotalOv, auto: subtotalAuto });
+    if (discountOv.manual !== undefined) list.push({ label: "Discount", ov: discountOv, auto: discountAuto });
+    if (shippingOv.manual !== undefined) list.push({ label: "Shipping / other", ov: shippingOv, auto: 0 });
+    if (roundOffOv.manual !== undefined) list.push({ label: "Round-off", ov: roundOffOv, auto: 0 });
+    if (grandOv.manual !== undefined) list.push({ label: "Grand total", ov: grandOv, auto: grandTotalAuto });
+    if (paidOv.manual !== undefined) list.push({ label: "Paid amount", ov: paidOv, auto: payAmountAuto });
+    return list;
+  }, [
+    diamondRows,
+    lineOv,
+    subtotalOv,
+    discountOv,
+    shippingOv,
+    roundOffOv,
+    grandOv,
+    paidOv,
+    subtotalAuto,
+    discountAuto,
+    grandTotalAuto,
+    payAmountAuto,
+  ]);
+
+  function buildMakingLines(): MakingLine[] {
+    return makingRows.map((r) => ({
+      id: r.line.id,
+      description: r.line.description,
+      quantity: n(r.line.quantity),
+      grossWeight: n(r.line.grossWeight),
+      netWeight: n(r.line.netWeight),
+      diamondWeight: n(r.line.diamondWeight),
+      makingRate: r.perGram,
+      total: r.total,
+      sku: r.line.sku?.trim() || undefined,
+      stoneWeight: r.line.stoneWeight,
+      stoneAmount: r.line.stoneAmount,
+      makingRatePerGram: r.perGram || undefined,
+      totalMaking: r.totalMaking || undefined,
+    }));
   }
 
   function save(andPdf: boolean) {
@@ -202,43 +496,75 @@ export function PurchaseForm({
       toast.error("Add at least one item with a description or amount.");
       return;
     }
+    if (!head.partyId) {
+      toast.error("Select the supplier.");
+      return;
+    }
+    if (isGst && !head.supplyLocation) {
+      toast.error("Select the supply location for GST purchases.");
+      return;
+    }
     if (payMode !== "pending" && !pay.account) {
       toast.error("Select the bank or cash account for the payment.");
       return;
     }
-    if ((payMode === "part" || payMode === "advance") && !(n(pay.amount) > 0)) {
+    if ((payMode === "part" || payMode === "advance") && !(payAmount > 0)) {
       toast.error("Enter the amount paid.");
+      return;
+    }
+    const missingReason = activeOverrides.find((o) => !o.ov.reason.trim());
+    if (missingReason) {
+      toast.error(`Enter a reason for the manual "${missingReason.label}" adjustment.`);
       return;
     }
 
     setSaving(true);
+    const overrideNote = activeOverrides.length
+      ? `Manual overrides — ${activeOverrides
+          .map((o) => `${o.label}: ${formatMoney(round2(o.ov.manual ?? 0))} (was ${formatMoney(o.auto)}) — ${o.ov.reason.trim()}`)
+          .join("; ")}`
+      : "";
+    const notes = [head.notes.trim(), overrideNote].filter(Boolean).join("\n");
+
     const result = store.savePurchaseBill({
       id: editing?.id,
       number: head.number.trim(),
       partyId: head.partyId,
       date: head.date,
-      dueDate: head.dueDate,
-      paymentTermsDays: n(head.termsDays),
+      dueDate,
+      paymentTermsDays: hasDueDays ? dueDaysNum : undefined,
       brokerName: head.broker.trim() || undefined,
       supplierInvoiceNumber: head.supplierInvoiceNumber.trim() || undefined,
       billKind: kind,
       usdRate: kind === "diamond" && usdRate > 0 ? usdRate : undefined,
+      dueDays: hasDueDays ? dueDaysNum : undefined,
+      purchaseType: head.purchaseType,
+      discountMode: head.discountMode,
+      discountValue: discountValue || undefined,
+      supplyLocation: isGst ? head.supplyLocation : undefined,
+      gstRate: isGst ? taxRate : undefined,
+      cgstAmount: isGst ? cgstAmount || undefined : undefined,
+      sgstAmount: isGst ? sgstAmount || undefined : undefined,
+      igstAmount: isGst ? igstAmount || undefined : undefined,
       lines:
         kind === "diamond"
           ? diamondRows.map((r) => ({
               id: r.line.id,
               description: r.line.description,
-              quantity: n(r.line.quantity) || 1,
+              quantity: 1,
+              pcs: n(r.line.pcs) || undefined,
               carat: n(r.line.carat),
               rate: r.inr,
               rateUsd: n(r.line.rateUsd) || undefined,
             }))
           : [],
-      makingLines:
-        kind === "jewelry_making" ? makingRows.map((r) => ({ ...r.line, total: r.total })) : [],
-      subtotal: grandTotal,
+      makingLines: kind === "jewelry_making" ? buildMakingLines() : [],
+      subtotal,
+      discount: discountAmount || undefined,
+      taxableAmount,
+      taxAmount: round2(cgstAmount + sgstAmount + igstAmount) || undefined,
       total: grandTotal,
-      notes: head.notes.trim() || undefined,
+      notes: notes || undefined,
     });
     if (!result.ok) {
       toast.error(result.message);
@@ -258,6 +584,7 @@ export function PurchaseForm({
         partyId: head.partyId,
         particulars: `Purchase payment — ${head.number.trim()}`,
         reference: pay.reference || undefined,
+        paymentMethod: pay.method || undefined,
         allocations: allocatedNow > 0 ? [{ invoiceId: result.id, amount: allocatedNow }] : [],
       };
       if (store.isLikelyDuplicate(entry)) {
@@ -280,27 +607,39 @@ export function PurchaseForm({
 
     if (andPdf) {
       const supplierName = store.parties.find((p) => p.id === head.partyId)?.name ?? "Supplier";
-      downloadBillPdf(
-        {
-          id: result.id ?? "tmp",
-          number: head.number.trim(),
-          partyId: head.partyId,
-          date: head.date,
-          dueDate: head.dueDate,
-          total: grandTotal,
-          paid: allocatedNow,
-          billKind: kind,
-          brokerName: head.broker.trim() || undefined,
-          supplierInvoiceNumber: head.supplierInvoiceNumber.trim() || undefined,
-          usdRate: usdRate || undefined,
-          subtotal: grandTotal,
-          notes: head.notes.trim() || undefined,
-          lines: kind === "diamond" ? diamondRows.map((r) => ({ ...r.line, rate: r.inr })) : [],
-          makingLines:
-            kind === "jewelry_making" ? makingRows.map((r) => ({ ...r.line, total: r.total })) : [],
-        },
-        supplierName,
-      );
+      const pdfBill: Invoice = {
+        id: result.id ?? "tmp",
+        number: head.number.trim(),
+        partyId: head.partyId,
+        date: head.date,
+        dueDate: dueDate !== head.date ? dueDate : undefined,
+        dueDays: hasDueDays ? dueDaysNum : undefined,
+        total: grandTotal,
+        paid: allocatedNow,
+        billKind: kind,
+        brokerName: head.broker.trim() || undefined,
+        supplierInvoiceNumber: head.supplierInvoiceNumber.trim() || undefined,
+        usdRate: usdRate || undefined,
+        subtotal,
+        discountMode: head.discountMode,
+        discountValue: discountAmount || undefined,
+        discount: discountAmount || undefined,
+        purchaseType: head.purchaseType,
+        supplyLocation: isGst ? head.supplyLocation : undefined,
+        taxableAmount,
+        cgstAmount: cgstAmount || undefined,
+        sgstAmount: sgstAmount || undefined,
+        igstAmount: igstAmount || undefined,
+        taxAmount: round2(cgstAmount + sgstAmount + igstAmount),
+        gstType: isGst ? (head.supplyLocation === "outside" ? "igst" : "cgst_sgst") : "non_gst",
+        gstRate: isGst ? taxRate : undefined,
+        shipping: shippingAmount || undefined,
+        roundOff: roundOffAmount || undefined,
+        notes: notes || undefined,
+        lines: kind === "diamond" ? diamondRows.map((r) => ({ ...r.line, rate: r.inr })) : [],
+        makingLines: kind === "jewelry_making" ? buildMakingLines() : [],
+      };
+      downloadBillPdf(pdfBill, supplierName);
     }
     onClose();
   }
@@ -313,7 +652,7 @@ export function PurchaseForm({
             {editing ? "Edit purchase bill" : "Add purchase"}
           </DialogTitle>
           <DialogDescription>
-            Totals are calculated automatically. Payments post a linked bank or cash entry.
+            Totals are calculated automatically. This bill stays in the Purchase section only.
           </DialogDescription>
         </DialogHeader>
 
@@ -351,59 +690,28 @@ export function PurchaseForm({
               />
             </FormField>
             <FormField label="Invoice date" required>
-              <Input type="date" value={head.date} onChange={(e) => setDate(e.target.value)} />
-            </FormField>
-            <FormField label="Payment terms (days)">
-              <Input
-                inputMode="decimal"
-                value={head.termsDays}
-                onChange={(e) => setTerms(e.target.value)}
-              />
-            </FormField>
-            <FormField label="Due date" required hint="Auto from terms — editable">
               <Input
                 type="date"
-                value={head.dueDate}
-                onChange={(e) => setHead({ ...head, dueDate: e.target.value })}
+                value={head.date}
+                onChange={(e) => setHead({ ...head, date: e.target.value })}
               />
             </FormField>
+            <FormField label="Payment due days">
+              <NumInput
+                decimals={0}
+                placeholder="e.g. 30"
+                value={head.dueDays}
+                onChange={(v) => setHead({ ...head, dueDays: v })}
+              />
+            </FormField>
+            <FormField label="Due date" hint="Auto-calculated: invoice date + due days">
+              <Input type="date" readOnly value={dueDate} className="bg-muted" />
+            </FormField>
             <FormField label="Supplier" required>
-              <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] gap-1.5">
-                <Select
-                  value={head.partyId}
-                  onValueChange={(v) => setHead({ ...head, partyId: v })}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Search / select supplier" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {suppliers.map((p) => (
-                      <SelectItem key={p.id} value={p.id}>
-                        {p.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  title="Add supplier"
-                  onClick={onAddSupplier}
-                >
-                  <Plus className="h-4 w-4" />
-                </Button>
-                <Button
-                  type="button"
-                  size="icon"
-                  variant="outline"
-                  title="Edit supplier"
-                  disabled={!head.partyId}
-                  onClick={() => head.partyId && onEditSupplier(head.partyId)}
-                >
-                  <Pencil className="h-4 w-4" />
-                </Button>
-              </div>
+              <SupplierPicker
+                value={head.partyId}
+                onChange={(id) => setHead({ ...head, partyId: id })}
+              />
             </FormField>
             <FormField label="Broker">
               <ContactPicker
@@ -418,16 +726,67 @@ export function PurchaseForm({
                 onChange={(e) => setHead({ ...head, supplierInvoiceNumber: e.target.value })}
               />
             </FormField>
+            <FormField label="Purchase type">
+              <Select
+                value={head.purchaseType}
+                onValueChange={(v) => setHead({ ...head, purchaseType: v as PurchaseType })}
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {(purchaseTypeOptions.length
+                    ? purchaseTypeOptions
+                    : ["Non-GST", "GST", "Import"]
+                  ).map((o) => (
+                    <SelectItem key={o} value={purchaseTypeId(o)}>
+                      {o}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </FormField>
+            {isGst ? (
+              <>
+                <FormField label="Supply location" required>
+                  <Select
+                    value={head.supplyLocation}
+                    onValueChange={(v) => setHead({ ...head, supplyLocation: v as SupplyLocation })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inside">Inside Gujarat</SelectItem>
+                      <SelectItem value="outside">Outside Gujarat</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </FormField>
+                <FormField label="Tax slab (%)" required>
+                  <Select
+                    value={head.taxSlab}
+                    onValueChange={(v) => setHead({ ...head, taxSlab: v })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {taxSlabOptions.map((s) => (
+                        <SelectItem key={s} value={s}>
+                          {s}%
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </FormField>
+              </>
+            ) : null}
             {kind === "diamond" ? (
               <FormField
                 label="USD conversion rate"
                 hint="Optional — leave blank to enter INR rates directly"
               >
-                <Input
-                  inputMode="decimal"
-                  value={head.usdRate}
-                  onChange={(e) => setHead({ ...head, usdRate: e.target.value })}
-                />
+                <NumInput value={head.usdRate} onChange={(v) => setHead({ ...head, usdRate: v })} />
               </FormField>
             ) : null}
             <FormField label="Notes (optional)">
@@ -480,181 +839,422 @@ export function PurchaseForm({
             </div>
 
             {kind === "diamond" ? (
-              <div className="mt-3 space-y-2">
-                <div className="hidden items-center gap-2 px-2 sm:grid sm:grid-cols-[32px_minmax(0,1fr)_80px_100px_110px_120px_40px]">
-                  <ColHead label="Sr." />
-                  <ColHead label="Description" />
-                  <ColHead label="CT" className="text-right" />
-                  <ColHead label="Price/CT USD" className="text-right" />
-                  <ColHead label="Price/CT INR" className="text-right" />
-                  <ColHead label="Total INR" className="text-right" />
-                  <ColHead label="Act." />
-                </div>
-                {diamondRows.map((r, i) => (
-                  <div
-                    key={r.line.id}
-                    className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border p-2 sm:grid-cols-[32px_minmax(0,1fr)_80px_100px_110px_120px_40px] sm:items-center"
-                  >
-                    <span className="num text-xs text-muted-foreground sm:text-sm">{i + 1}</span>
-                    <div className="col-span-2 min-w-0 sm:col-span-1">
-                      <CellLabel label="Description" />
-                      <Combo
-                        className="h-9"
-                        value={r.line.description}
-                        onChange={(v) => patchLine(r.line.id, { description: v })}
-                        options={descriptions}
-                        placeholder="Item description"
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="CT" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.carat || ""}
-                        onChange={(e) => patchLine(r.line.id, { carat: n(e.target.value) })}
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Price/CT USD" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.rateUsd || ""}
-                        onChange={(e) => patchLine(r.line.id, { rateUsd: n(e.target.value) })}
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Price/CT INR" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        readOnly={n(r.line.rateUsd) > 0 && usdRate > 0}
-                        value={n(r.line.rateUsd) > 0 && usdRate > 0 ? r.inr : r.line.rate || ""}
-                        onChange={(e) => patchLine(r.line.id, { rate: n(e.target.value) })}
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <CellLabel label="Total INR" />
-                      <p className="num truncate text-right text-sm font-semibold text-navy">
-                        {formatMoney(r.total)}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      title="Delete item"
-                      onClick={() =>
-                        setLines((p) => (p.length > 1 ? p.filter((l) => l.id !== r.line.id) : p))
-                      }
-                    >
-                      <Trash2 className="h-4 w-4 text-neg" />
-                    </Button>
+              <div className="mt-3 overflow-x-auto">
+                <div className="min-w-[800px] space-y-2 sm:min-w-0">
+                  <div className="hidden items-center gap-2 px-2 sm:grid sm:grid-cols-[32px_minmax(0,1fr)_60px_90px_100px_100px_110px_96px]">
+                    <ColHead label="Sr." />
+                    <ColHead label="Description" />
+                    <ColHead label="PCS" className="text-right" />
+                    <ColHead label="CT" className="text-right" />
+                    <ColHead label="Price/CT USD" className="text-right" />
+                    <ColHead label="Price/CT INR" className="text-right" />
+                    <ColHead label="Total INR" className="text-right" />
+                    <ColHead label="Actions" className="text-right" />
                   </div>
-                ))}
+                  {diamondRows.map((r, i) => {
+                    const expanded = expandedRows[r.line.id] ?? false;
+                    const usdDriven = n(r.line.rateUsd) > 0 && usdRate > 0;
+                    const ov = lineOv[r.line.id];
+                    return (
+                      <div
+                        key={r.line.id}
+                        className="rounded-lg border border-border p-2 sm:grid sm:grid-cols-[32px_minmax(0,1fr)_60px_90px_100px_100px_110px_96px] sm:items-center sm:gap-2"
+                      >
+                        <div className="flex items-center justify-between sm:contents">
+                          <span className="num text-xs text-muted-foreground sm:text-sm">{i + 1}</span>
+                          <div className="sm:hidden">
+                            <RowActions
+                              expanded={expanded}
+                              onToggle={() => toggleRow(r.line.id)}
+                              onCopy={() =>
+                                setLines((p) => [...p, { ...r.line, id: uid("ln") }])
+                              }
+                              onDelete={() =>
+                                setLines((p) => (p.length > 1 ? p.filter((l) => l.id !== r.line.id) : p))
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div
+                          className={cn(
+                            "mt-2 grid grid-cols-2 gap-2 sm:mt-0 sm:contents",
+                            !expanded && "hidden sm:grid",
+                          )}
+                        >
+                          <div className="col-span-2 min-w-0 sm:col-span-1">
+                            <CellLabel label="Description" />
+                            <MasterCombo
+                              masterId="productDescriptions"
+                              className="h-9"
+                              value={r.line.description}
+                              onChange={(v) => patchLine(r.line.id, { description: v })}
+                              placeholder="Item description"
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="PCS" />
+                            <NumInput
+                              decimals={0}
+                              className="h-9 text-right"
+                              value={r.line.pcs}
+                              onChange={(v) => patchLine(r.line.id, { pcs: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="CT" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.carat}
+                              onChange={(v) => patchLine(r.line.id, { carat: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Price/CT USD" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.rateUsd}
+                              onChange={(v) => patchLine(r.line.id, { rateUsd: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Price/CT INR" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={usdDriven ? r.inr : r.line.rate}
+                              onChange={(v) => patchLine(r.line.id, { rate: v, rateUsd: 0 })}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <CellLabel label="Total INR" />
+                            <div className="flex items-center justify-end gap-1">
+                              <p className="num truncate text-right text-sm font-semibold text-navy">
+                                {formatMoney(r.total)}
+                              </p>
+                              {ov?.manual !== undefined ? <ManualBadge /> : null}
+                            </div>
+                            <div className="mt-1">
+                              <AutoManual
+                                auto={r.auto}
+                                manual={ov?.manual}
+                                reason={ov?.reason ?? ""}
+                                onManual={(v) =>
+                                  setLineOv((p) => ({ ...p, [r.line.id]: { manual: v, reason: p[r.line.id]?.reason ?? "" } }))
+                                }
+                                onReason={(v) =>
+                                  setLineOv((p) => ({ ...p, [r.line.id]: { manual: p[r.line.id]?.manual, reason: v } }))
+                                }
+                              />
+                            </div>
+                          </div>
+                          <div className="hidden sm:block">
+                            <RowActions
+                              expanded={expanded}
+                              onToggle={() => toggleRow(r.line.id)}
+                              onCopy={() => setLines((p) => [...p, { ...r.line, id: uid("ln") }])}
+                              onDelete={() =>
+                                setLines((p) => (p.length > 1 ? p.filter((l) => l.id !== r.line.id) : p))
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="num flex justify-end gap-3 pt-1 text-sm font-medium text-navy">
+                    <span>
+                      Total PCS: {round2(diamondRows.reduce((s, r) => s + n(r.line.pcs), 0))}
+                    </span>
+                    <span>Total CT: {totalCt}</span>
+                  </div>
+                </div>
               </div>
             ) : (
-              <div className="mt-3 space-y-2">
-                <div className="hidden items-center gap-2 px-2 lg:grid lg:grid-cols-[28px_minmax(0,1fr)_60px_80px_80px_90px_90px_110px_40px]">
-                  <ColHead label="Sr." />
-                  <ColHead label="Description" />
-                  <ColHead label="Qty" className="text-right" />
-                  <ColHead label="Gross WT" className="text-right" />
-                  <ColHead label="Net WT" className="text-right" />
-                  <ColHead label="Diamond WT" className="text-right" />
-                  <ColHead label="Making Rate" className="text-right" />
-                  <ColHead label="Total" className="text-right" />
-                  <ColHead label="Act." />
-                </div>
-                {makingRows.map((r, i) => (
-                  <div
-                    key={r.line.id}
-                    className="grid grid-cols-2 items-end gap-2 rounded-lg border border-border p-2 sm:grid-cols-3 lg:grid-cols-[28px_minmax(0,1fr)_60px_80px_80px_90px_90px_110px_40px] lg:items-center"
-                  >
-                    <span className="num text-xs text-muted-foreground lg:text-sm">{i + 1}</span>
-                    <div className="col-span-2 min-w-0 sm:col-span-3 lg:col-span-1">
-                      <CellLabel label="Description" />
-                      <Combo
-                        className="h-9"
-                        value={r.line.description}
-                        onChange={(v) => patchMaking(r.line.id, { description: v })}
-                        options={descriptions}
-                        placeholder="Item description"
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Qty" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.quantity || ""}
-                        onChange={(e) => patchMaking(r.line.id, { quantity: n(e.target.value) })}
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Gross WT" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.grossWeight || ""}
-                        onChange={(e) => patchMaking(r.line.id, { grossWeight: n(e.target.value) })}
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Net WT" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.netWeight || ""}
-                        onChange={(e) => patchMaking(r.line.id, { netWeight: n(e.target.value) })}
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Diamond WT" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.diamondWeight || ""}
-                        onChange={(e) =>
-                          patchMaking(r.line.id, { diamondWeight: n(e.target.value) })
-                        }
-                      />
-                    </div>
-                    <div>
-                      <CellLabel label="Making Rate" />
-                      <Input
-                        className="h-9 text-right"
-                        inputMode="decimal"
-                        value={r.line.makingRate || ""}
-                        onChange={(e) => patchMaking(r.line.id, { makingRate: n(e.target.value) })}
-                      />
-                    </div>
-                    <div className="min-w-0">
-                      <CellLabel label="Total" />
-                      <p className="num truncate text-right text-sm font-semibold text-navy">
-                        {formatMoney(r.total)}
-                      </p>
-                    </div>
-                    <Button
-                      type="button"
-                      size="icon"
-                      variant="ghost"
-                      title="Delete item"
-                      onClick={() =>
-                        setMaking((p) => (p.length > 1 ? p.filter((m) => m.id !== r.line.id) : p))
-                      }
-                    >
-                      <Trash2 className="h-4 w-4 text-neg" />
-                    </Button>
+              <div className="mt-3 overflow-x-auto">
+                <div className="space-y-2 lg:min-w-[1240px]">
+                  <div className="hidden items-center gap-2 px-2 lg:grid lg:grid-cols-[24px_86px_minmax(0,1fr)_54px_72px_72px_72px_72px_84px_96px_104px_88px]">
+                    <ColHead label="Sr." />
+                    <ColHead label="SKU" />
+                    <ColHead label="Description" />
+                    <ColHead label="Qty" className="text-right" />
+                    <ColHead label="Gross WT" className="text-right" />
+                    <ColHead label="Stone WT" className="text-right" />
+                    <ColHead label="Net WT" className="text-right" />
+                    <ColHead label="Dia WT" className="text-right" />
+                    <ColHead label="Making / g" className="text-right" />
+                    <ColHead label="Stone Amt" className="text-right" />
+                    <ColHead label="Total Making" className="text-right" />
+                    <ColHead label="Actions" className="text-right" />
                   </div>
-                ))}
+                  {makingRows.map((r, i) => {
+                    const expanded = expandedRows[r.line.id] ?? false;
+                    const ov = makingOv[r.line.id];
+                    return (
+                      <div
+                        key={r.line.id}
+                        className="rounded-lg border border-border p-2 lg:grid lg:grid-cols-[24px_86px_minmax(0,1fr)_54px_72px_72px_72px_72px_84px_96px_104px_88px] lg:items-center lg:gap-2"
+                      >
+                        <div className="flex items-center justify-between lg:contents">
+                          <span className="num text-xs text-muted-foreground lg:text-sm">{i + 1}</span>
+                          <div className="lg:hidden">
+                            <RowActions
+                              expanded={expanded}
+                              onToggle={() => toggleRow(r.line.id)}
+                              onCopy={() => setMaking((p) => [...p, { ...r.line, id: uid("mk") }])}
+                              onDelete={() =>
+                                setMaking((p) => (p.length > 1 ? p.filter((m) => m.id !== r.line.id) : p))
+                              }
+                            />
+                          </div>
+                        </div>
+                        <div
+                          className={cn(
+                            "mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:mt-0 lg:contents",
+                            !expanded && "hidden lg:contents",
+                          )}
+                        >
+                          <div className="min-w-0">
+                            <CellLabel label="SKU" />
+                            <Input
+                              className="h-9"
+                              placeholder="SKU"
+                              value={r.line.sku ?? ""}
+                              onChange={(e) => patchMaking(r.line.id, { sku: e.target.value })}
+                            />
+                          </div>
+                          <div className="col-span-2 min-w-0 sm:col-span-3 lg:col-span-1">
+                            <CellLabel label="Description" />
+                            <MasterCombo
+                              masterId="productDescriptions"
+                              className="h-9"
+                              value={r.line.description}
+                              onChange={(v) => patchMaking(r.line.id, { description: v })}
+                              placeholder="Item description"
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Qty" />
+                            <NumInput
+                              decimals={0}
+                              className="h-9 text-right"
+                              value={r.line.quantity}
+                              onChange={(v) => patchMaking(r.line.id, { quantity: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Gross WT" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.grossWeight}
+                              onChange={(v) => patchMaking(r.line.id, { grossWeight: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Stone WT" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.stoneWeight ?? 0}
+                              onChange={(v) => patchMaking(r.line.id, { stoneWeight: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Net WT" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.netWeight}
+                              onChange={(v) => patchMaking(r.line.id, { netWeight: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Dia WT" />
+                            <NumInput
+                              className="h-9 text-right"
+                              value={r.line.diamondWeight}
+                              onChange={(v) => patchMaking(r.line.id, { diamondWeight: v })}
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Making / g" />
+                            <MoneyInput
+                              className="h-9 text-right"
+                              value={r.line.makingRatePerGram ?? r.line.makingRate}
+                              onChange={(v) =>
+                                patchMaking(r.line.id, { makingRatePerGram: v, makingRate: v })
+                              }
+                            />
+                          </div>
+                          <div>
+                            <CellLabel label="Stone Amt" />
+                            <MoneyInput
+                              className="h-9 text-right"
+                              value={r.line.stoneAmount ?? 0}
+                              onChange={(v) => patchMaking(r.line.id, { stoneAmount: v })}
+                            />
+                          </div>
+                          <div className="min-w-0">
+                            <CellLabel label="Total Making" />
+                            <div className="flex items-center justify-end gap-1">
+                              <p className="num truncate text-right text-sm font-semibold text-navy">
+                                {formatMoney(r.total)}
+                              </p>
+                              {ov?.manual !== undefined ? <ManualBadge /> : null}
+                            </div>
+                            <div className="mt-1">
+                              <AutoManual
+                                auto={r.auto}
+                                manual={ov?.manual}
+                                reason={ov?.reason ?? ""}
+                                onManual={(v) =>
+                                  setMakingOv((p) => ({ ...p, [r.line.id]: { manual: v, reason: p[r.line.id]?.reason ?? "" } }))
+                                }
+                                onReason={(v) =>
+                                  setMakingOv((p) => ({ ...p, [r.line.id]: { manual: p[r.line.id]?.manual, reason: v } }))
+                                }
+                              />
+                            </div>
+                          </div>
+                          <div className="hidden lg:block">
+                            <RowActions
+                              expanded={expanded}
+                              onToggle={() => toggleRow(r.line.id)}
+                              onCopy={() => setMaking((p) => [...p, { ...r.line, id: uid("mk") }])}
+                              onDelete={() =>
+                                setMaking((p) => (p.length > 1 ? p.filter((m) => m.id !== r.line.id) : p))
+                              }
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div className="num grid grid-cols-2 gap-2 rounded-lg bg-muted px-3 py-2 text-xs font-medium text-navy sm:grid-cols-4 lg:grid-cols-7">
+                    <span>Qty: {round2(makingRows.reduce((s, r) => s + n(r.line.quantity), 0))}</span>
+                    <span>Gross WT: {round2(makingRows.reduce((s, r) => s + n(r.line.grossWeight), 0))}</span>
+                    <span>Stone WT: {round2(makingRows.reduce((s, r) => s + n(r.line.stoneWeight), 0))}</span>
+                    <span>Net WT: {round2(makingRows.reduce((s, r) => s + n(r.line.netWeight), 0))}</span>
+                    <span>Dia WT: {round2(makingRows.reduce((s, r) => s + n(r.line.diamondWeight), 0))}</span>
+                    <span>
+                      Total Making: {formatMoney(round2(makingRows.reduce((s, r) => s + r.totalMaking, 0)))}
+                    </span>
+                    <span>
+                      Total Jewelry Value:{" "}
+                      {formatMoney(round2(makingRows.reduce((s, r) => s + r.total, 0)))}
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
 
-            <div className="num mt-3 flex justify-end">
-              <div className="rounded-lg bg-pu-total-bg px-4 py-2 text-sm font-semibold text-pu-total">
-                Grand Total {formatMoney(grandTotal)}
+            <div className="num mt-3 flex flex-wrap items-start justify-end gap-2">
+              <div className="min-w-[180px] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  Subtotal {formatMoney(subtotal)}
+                  {subtotalOv.manual !== undefined ? <ManualBadge /> : null}
+                </div>
+                <AutoManual
+                  auto={subtotalAuto}
+                  manual={subtotalOv.manual}
+                  reason={subtotalOv.reason}
+                  className="mt-1"
+                  onManual={(v) => setSubtotalOv((p) => ({ ...p, manual: v }))}
+                  onReason={(v) => setSubtotalOv((p) => ({ ...p, reason: v }))}
+                />
+              </div>
+              <div className="min-w-[180px] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  Discount −{formatMoney(discountAmount)}
+                  {discountOv.manual !== undefined ? <ManualBadge /> : null}
+                </div>
+                <div className="mt-1 flex items-center gap-1">
+                  <Select
+                    value={head.discountMode}
+                    onValueChange={(v) => setHead({ ...head, discountMode: v as DiscountMode })}
+                  >
+                    <SelectTrigger className="h-9 w-24">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="fixed">Amount</SelectItem>
+                      <SelectItem value="percent">%</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <NumInput
+                    decimals={2}
+                    className="h-9"
+                    value={head.discountValue}
+                    onChange={(v) => setHead({ ...head, discountValue: v })}
+                  />
+                </div>
+                <AutoManual
+                  auto={discountAuto}
+                  manual={discountOv.manual}
+                  reason={discountOv.reason}
+                  className="mt-1"
+                  onManual={(v) => setDiscountOv((p) => ({ ...p, manual: v }))}
+                  onReason={(v) => setDiscountOv((p) => ({ ...p, reason: v }))}
+                />
+              </div>
+              <div className="min-w-[180px] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  Shipping / other {formatMoney(shippingAmount)}
+                  {shippingOv.manual !== undefined ? <ManualBadge /> : null}
+                </div>
+                <AutoManual
+                  auto={0}
+                  manual={shippingOv.manual}
+                  reason={shippingOv.reason}
+                  className="mt-1"
+                  onManual={(v) => setShippingOv((p) => ({ ...p, manual: v }))}
+                  onReason={(v) => setShippingOv((p) => ({ ...p, reason: v }))}
+                />
+              </div>
+              {isGst ? (
+                <>
+                  <div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                    Taxable {formatMoney(taxableAmount)}
+                  </div>
+                  {head.supplyLocation === "inside" ? (
+                    <>
+                      <div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                        CGST {formatMoney(cgstAmount)}
+                      </div>
+                      <div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                        SGST {formatMoney(sgstAmount)}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                      IGST {formatMoney(igstAmount)}
+                    </div>
+                  )}
+                </>
+              ) : null}
+              <div className="min-w-[180px] rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
+                <div className="flex items-center gap-1">
+                  Round-off {formatMoney(roundOffAmount)}
+                  {roundOffOv.manual !== undefined ? <ManualBadge /> : null}
+                </div>
+                <AutoManual
+                  auto={0}
+                  manual={roundOffOv.manual}
+                  reason={roundOffOv.reason}
+                  className="mt-1"
+                  onManual={(v) => setRoundOffOv((p) => ({ ...p, manual: v }))}
+                  onReason={(v) => setRoundOffOv((p) => ({ ...p, reason: v }))}
+                />
+              </div>
+              <div className="min-w-[180px] rounded-lg bg-pu-total-bg px-4 py-2 text-sm font-semibold text-pu-total">
+                <div className="flex items-center gap-1">
+                  Grand Total {formatMoney(grandTotal)}
+                  {grandOv.manual !== undefined ? <ManualBadge /> : null}
+                </div>
+                <AutoManual
+                  auto={grandTotalAuto}
+                  manual={grandOv.manual}
+                  reason={grandOv.reason}
+                  className="mt-1"
+                  onManual={(v) => setGrandOv((p) => ({ ...p, manual: v }))}
+                  onReason={(v) => setGrandOv((p) => ({ ...p, reason: v }))}
+                />
               </div>
             </div>
           </div>
@@ -690,12 +1290,28 @@ export function PurchaseForm({
             {payMode !== "pending" ? (
               <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                 <FormField label="Amount paid" required>
-                  <Input
-                    inputMode="decimal"
-                    readOnly={payMode === "paid"}
-                    value={payMode === "paid" ? grandTotal : pay.amount}
-                    onChange={(e) => setPay({ ...pay, amount: e.target.value })}
-                  />
+                  <div>
+                    <MoneyInput
+                      readOnly={payMode === "paid"}
+                      value={payMode === "paid" ? grandTotal : (paidOv.manual !== undefined ? paidOv.manual : pay.amount)}
+                      onChange={(v) =>
+                        paidOv.manual !== undefined
+                          ? setPaidOv((p) => ({ ...p, manual: v }))
+                          : setPay({ ...pay, amount: v })
+                      }
+                    />
+                    {payMode !== "paid" ? (
+                      <AutoManual
+                        auto={payAmountAuto}
+                        manual={paidOv.manual}
+                        reason={paidOv.reason}
+                        className="mt-1"
+                        onManual={(v) => setPaidOv((p) => ({ ...p, manual: v }))}
+                        onReason={(v) => setPaidOv((p) => ({ ...p, reason: v }))}
+                      />
+                    ) : null}
+                    {paidOv.manual !== undefined ? <ManualBadge /> : null}
+                  </div>
                 </FormField>
                 <FormField label="Payment date" required>
                   <Input
@@ -722,6 +1338,14 @@ export function PurchaseForm({
                   <Input
                     value={pay.reference}
                     onChange={(e) => setPay({ ...pay, reference: e.target.value })}
+                  />
+                </FormField>
+                <FormField label="Payment mode">
+                  <MasterCombo
+                    masterId="paymentModes"
+                    value={pay.method}
+                    onChange={(v) => setPay({ ...pay, method: v })}
+                    placeholder="Bank Transfer, UPI…"
                   />
                 </FormField>
               </div>

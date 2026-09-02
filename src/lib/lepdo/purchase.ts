@@ -1,3 +1,4 @@
+import { isLedgerEntry, isPosted } from "./entry";
 import { round2, todayISO } from "./format";
 import { paymentAccountLabel, statusOf, type InvoiceStatus, type PaymentRow } from "./sales";
 import type { Invoice, Party, Transaction } from "./types";
@@ -49,7 +50,7 @@ export interface PurchaseModel {
 }
 
 export const isPurchasePayment = (t: Transaction) =>
-  !t.voided && t.category === "purchase_payment" && t.direction === "out";
+  isPosted(t) && !isLedgerEntry(t) && t.category === "purchase_payment" && t.direction === "out";
 
 export interface PurchaseBuildInput {
   bills: Invoice[];
@@ -67,7 +68,9 @@ export function buildPurchaseModel(input: PurchaseBuildInput): PurchaseModel {
 
   const paymentTx = input.transactions
     .filter((t) => isPurchasePayment(t) && (!asOf || t.date <= asOf))
-    .sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date)));
+    .sort((a, b) =>
+      a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date),
+    );
 
   const billIds = new Set(bills.map((b) => b.id));
   const paidByBill = new Map<string, number>();
@@ -130,7 +133,11 @@ export function buildPurchaseModel(input: PurchaseBuildInput): PurchaseModel {
   const ids = new Set<string>([...byParty.keys(), ...advanceByParty.keys()]);
   const suppliers: SupplierView[] = [...ids]
     .map((id) => {
-      const party = partyById.get(id) ?? { id, name: "Unknown supplier", type: "supplier" as const };
+      const party = partyById.get(id) ?? {
+        id,
+        name: "Unknown supplier",
+        type: "supplier" as const,
+      };
       const list = byParty.get(id) ?? [];
       const totalPurchases = round2(list.reduce((s, v) => s + v.bill.total, 0));
       const paid = round2(list.reduce((s, v) => s + v.paid, 0));
@@ -143,7 +150,16 @@ export function buildPurchaseModel(input: PurchaseBuildInput): PurchaseModel {
           : paid > 0
             ? "part"
             : "pending";
-      return { party, bills: list, totalPurchases, paid, advance, pending, billCount: list.length, status };
+      return {
+        party,
+        bills: list,
+        totalPurchases,
+        paid,
+        advance,
+        pending,
+        billCount: list.length,
+        status,
+      };
     })
     .sort((a, b) => b.pending - a.pending || b.totalPurchases - a.totalPurchases);
 
@@ -207,7 +223,15 @@ export function brokerGroups(rows: BillView[]): BrokerView[] {
 }
 
 export function supplierLedgerRows(supplier: SupplierView, payments: PaymentRow[]) {
-  const rows: { id: string; date: string; type: string; reference: string; particulars: string; debit: number; credit: number }[] = [];
+  const rows: {
+    id: string;
+    date: string;
+    type: string;
+    reference: string;
+    particulars: string;
+    debit: number;
+    credit: number;
+  }[] = [];
   for (const v of supplier.bills) {
     rows.push({
       id: `bill-${v.bill.id}`,
@@ -241,7 +265,9 @@ export function supplierLedgerRows(supplier: SupplierView, payments: PaymentRow[
         credit: 0,
       });
   }
-  rows.sort((a, b) => (a.date === b.date ? a.type.localeCompare(b.type) : a.date.localeCompare(b.date)));
+  rows.sort((a, b) =>
+    a.date === b.date ? a.type.localeCompare(b.type) : a.date.localeCompare(b.date),
+  );
   let balance = 0;
   return rows.map((r) => {
     balance = round2(balance + r.credit - r.debit);

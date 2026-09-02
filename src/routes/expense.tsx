@@ -1,3 +1,4 @@
+import { isLedgerEntry, isPosted } from "@/lib/lepdo/entry";
 import { useEffect, useMemo, useState } from "react";
 import {
   FilterBar,
@@ -159,11 +160,17 @@ function ExpensePage() {
       ? "Unpaid"
       : (sources.find((s) => s.id === t.accountId)?.label ?? "—");
 
-  /** every non-void expense transaction, whatever screen created it */
+  /** every non-void expense recorded in the Expense section (never Bank/Cash ledger entries) */
   const allExpenses = useMemo(
-    () => store.transactions.filter((t) => t.category === "expense" && !t.voided),
+    () =>
+      store.transactions.filter(
+        (t) => t.category === "expense" && !t.voided && !isLedgerEntry(t),
+      ),
     [store.transactions],
   );
+
+  /** only confirmed (approved) entries move totals, dashboards and P&L */
+  const postedExpenses = useMemo(() => allExpenses.filter(isPosted), [allExpenses]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -251,7 +258,7 @@ function ExpensePage() {
 
   const cards = useMemo(() => {
     const monthStart = `${today.slice(0, 7)}-01`;
-    const paidOnly = allExpenses.filter((t) => t.expensePaid !== false && !!t.accountId);
+    const paidOnly = postedExpenses.filter((t) => t.expensePaid !== false && !!t.accountId);
     const total = paidOnly.reduce((s, t) => s + t.amount, 0);
     const monthly = paidOnly
       .filter((t) => t.date >= monthStart && t.date <= today)
@@ -262,7 +269,7 @@ function ExpensePage() {
       byHead.set(head, (byHead.get(head) ?? 0) + t.amount);
     }
     const top = [...byHead.entries()].sort((a, b) => b[1] - a[1])[0];
-    const unpaid = allExpenses.filter((t) => t.expensePaid === false || !t.accountId);
+    const unpaid = postedExpenses.filter((t) => t.expensePaid === false || !t.accountId);
     return {
       total,
       monthly,
@@ -271,20 +278,21 @@ function ExpensePage() {
       unpaidTotal: unpaid.reduce((s, t) => s + t.amount, 0),
       unpaidCount: unpaid.length,
     };
-  }, [allExpenses, today]);
+  }, [postedExpenses, today]);
 
   const periodTotals = useMemo(() => {
-    const paid = rows.filter((t) => t.expensePaid !== false && !!t.accountId);
-    const unpaid = rows.filter((t) => t.expensePaid === false || !t.accountId);
+    const posted = rows.filter(isPosted);
+    const paid = posted.filter((t) => t.expensePaid !== false && !!t.accountId);
+    const unpaid = posted.filter((t) => t.expensePaid === false || !t.accountId);
     const byHead = new Map<string, number>();
-    for (const t of rows) {
+    for (const t of posted) {
       const head = expenseHead(t.expenseCategory);
       byHead.set(head, (byHead.get(head) ?? 0) + t.amount);
     }
     return {
       paid: paid.reduce((s, t) => s + t.amount, 0),
       unpaid: unpaid.reduce((s, t) => s + t.amount, 0),
-      grand: rows.reduce((s, t) => s + t.amount, 0),
+      grand: posted.reduce((s, t) => s + t.amount, 0),
       byHead: [...byHead.entries()]
         .map(([label, amount]) => ({ label, amount }))
         .sort((a, b) => b.amount - a.amount),
@@ -331,25 +339,17 @@ function ExpensePage() {
   return (
     <div className="space-y-4 pb-8">
       {/* Header */}
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">
-          Expense Ledger
-        </h1>
-        <div className="flex flex-wrap items-center gap-2">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button variant="outline" className="h-9 border-gold text-navy">
-                <Download className="size-4" /> Download Report
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuLabel>Filtered expenses</DropdownMenuLabel>
-              <DropdownMenuItem onClick={() => doDownload("excel")}>Excel (.xls)</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => doDownload("pdf")}>PDF</DropdownMenuItem>
-              <DropdownMenuItem onClick={() => doDownload("csv")}>CSV</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-
+      <header className="space-y-3">
+        <div className="min-w-0">
+          <h1 className="truncate text-lg font-semibold text-navy sm:text-xl lg:text-2xl">
+            Expense Ledger
+          </h1>
+          <p className="truncate text-xs text-muted-foreground">
+            {formatDate(from)} – {formatDate(to)} · {rows.length}{" "}
+            {rows.length === 1 ? "entry" : "entries"}
+          </p>
+        </div>
+        <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
           <Button
             onClick={() => {
               setEditing(null);
@@ -359,8 +359,24 @@ function ExpensePage() {
           >
             <Plus className="size-4" /> Add Expense
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                className="col-span-2 h-9 border-gold text-navy sm:col-span-1"
+              >
+                <Download className="size-4" /> Download Filtered Report
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuLabel>Filtered expenses</DropdownMenuLabel>
+              <DropdownMenuItem onClick={() => doDownload("excel")}>Excel (.xls)</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => doDownload("pdf")}>PDF</DropdownMenuItem>
+              <DropdownMenuItem onClick={() => doDownload("csv")}>CSV</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </div>
+      </header>
 
       {/* Summary cards */}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
@@ -461,6 +477,7 @@ function ExpensePage() {
                     <th className="px-3 py-2 text-left font-semibold">Category</th>
                     <th className="px-3 py-2 text-left font-semibold">Particulars</th>
                     <th className="px-3 py-2 text-left font-semibold">Payment From</th>
+                    <th className="px-3 py-2 text-left font-semibold">Source &amp; Status</th>
                     <th className="px-3 py-2 text-right font-semibold">Amount</th>
                     <th className="w-10 px-2 py-2" aria-label="Action" />
                   </tr>
@@ -494,6 +511,7 @@ function ExpensePage() {
                           {sourceLabel(t)}
                         </span>
                       </td>
+                      <td className="max-w-[320px] px-3 py-2"></td>
                       <td className="num whitespace-nowrap px-3 py-2 text-right font-semibold text-navy">
                         {formatMoney(t.amount)}
                       </td>
@@ -597,7 +615,7 @@ function ExpensePage() {
             <AlertDialogTitle>Delete / void this expense?</AlertDialogTitle>
             <AlertDialogDescription>
               {voiding
-                ? `${formatMoney(voiding.amount)} on ${formatDate(voiding.date)} will be removed from expense totals${voiding.expensePaid === false || !voiding.accountId ? "" : " and from its linked bank or cash ledger"}. It stays in the audit log.`
+                ? `${formatMoney(voiding.amount)} on ${formatDate(voiding.date)} will be removed from expense totals. It stays in the audit log.`
                 : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -757,7 +775,7 @@ function ExpenseForm({
       store.transactions.find(
         (t) =>
           t.id !== editing?.id &&
-          !t.voided &&
+          isPosted(t) &&
           t.category === "expense" &&
           t.date === form.date &&
           Math.abs(t.amount - amount) < 0.005 &&

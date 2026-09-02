@@ -1,3 +1,4 @@
+import { isPosted } from "@/lib/lepdo/entry";
 import { useMemo, useState } from "react";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import {
@@ -33,7 +34,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { formatDate, formatMoney, todayISO } from "@/lib/lepdo/format";
+import { formatDate, formatMoney, round2, todayISO } from "@/lib/lepdo/format";
 import { partyName, useLepdo } from "@/lib/lepdo/store";
 import { PRESETS, type Preset } from "@/lib/lepdo/period";
 import { useShell } from "@/components/lepdo/shell-context";
@@ -58,6 +59,20 @@ import {
   type Tone,
 } from "@/lib/lepdo/extras";
 import type { ExportTable } from "@/lib/lepdo/exportTable";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Line,
+  LineChart,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip as RTooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 import {
   Chip,
   DownloadMenu,
@@ -151,7 +166,10 @@ function ReportsPage() {
     [store.bankAccounts, store.cashLocations],
   );
 
-  const fyOptions = useMemo(() => [fyOption(0, today), fyOption(1, today), fyOption(2, today)], [today]);
+  const fyOptions = useMemo(
+    () => [fyOption(0, today), fyOption(1, today), fyOption(2, today)],
+    [today],
+  );
 
   function clearAll() {
     setAccountFilter("all");
@@ -173,7 +191,13 @@ function ReportsPage() {
         banks: store.bankAccounts,
         cash: store.cashLocations,
       }),
-    [store.salesInvoices, store.transactions, store.parties, store.bankAccounts, store.cashLocations],
+    [
+      store.salesInvoices,
+      store.transactions,
+      store.parties,
+      store.bankAccounts,
+      store.cashLocations,
+    ],
   );
 
   const purchaseModel = useMemo(
@@ -185,7 +209,13 @@ function ReportsPage() {
         banks: store.bankAccounts,
         cash: store.cashLocations,
       }),
-    [store.purchaseBills, store.transactions, store.parties, store.bankAccounts, store.cashLocations],
+    [
+      store.purchaseBills,
+      store.transactions,
+      store.parties,
+      store.bankAccounts,
+      store.cashLocations,
+    ],
   );
 
   const salesRows = useMemo(
@@ -216,11 +246,14 @@ function ReportsPage() {
     () =>
       store.transactions.filter(
         (t) =>
-          !t.voided &&
+          isPosted(t) &&
           inRange(t.date) &&
           (accountFilter === "all" || t.accountId === accountFilter) &&
           (partyFilter === "all" || t.partyId === partyFilter) &&
-          textIncludes([t.particulars, t.reference, t.code, partyName(store.parties, t.partyId)], search),
+          textIncludes(
+            [t.particulars, t.reference, t.code, partyName(store.parties, t.partyId)],
+            search,
+          ),
       ),
     [store.transactions, store.parties, from, to, accountFilter, partyFilter, search],
   );
@@ -235,7 +268,15 @@ function ReportsPage() {
   );
 
   const uchhinaLedgers = useMemo(
-    () => buildPersonLedgers(store.transactions, store.parties, store.bankAccounts, store.cashLocations, from, to),
+    () =>
+      buildPersonLedgers(
+        store.transactions,
+        store.parties,
+        store.bankAccounts,
+        store.cashLocations,
+        from,
+        to,
+      ),
     [store.transactions, store.parties, store.bankAccounts, store.cashLocations, from, to],
   );
   const uchhinaFilteredRows = useMemo(
@@ -251,7 +292,10 @@ function ReportsPage() {
     [uchhinaLedgers, partyFilter, accountFilter, search, store.bankAccounts, store.cashLocations],
   );
 
-  const stockDiamond = useMemo(() => buildStockView(store.stockEntries, "diamond"), [store.stockEntries]);
+  const stockDiamond = useMemo(
+    () => buildStockView(store.stockEntries, "diamond"),
+    [store.stockEntries],
+  );
   const stockGold = useMemo(() => buildStockView(store.stockEntries, "gold"), [store.stockEntries]);
 
   const liabilityViews = useMemo(
@@ -269,8 +313,13 @@ function ReportsPage() {
   const teamRows = useMemo(
     () =>
       store.teamPayments
-        .filter((p) => !p.voided && inRange(p.date) && textIncludes([p.particulars, p.month], search))
-        .map((p) => ({ ...p, memberName: store.teamMembers.find((m) => m.id === p.memberId)?.name ?? "—" })),
+        .filter(
+          (p) => !p.voided && inRange(p.date) && textIncludes([p.particulars, p.month], search),
+        )
+        .map((p) => ({
+          ...p,
+          memberName: store.teamMembers.find((m) => m.id === p.memberId)?.name ?? "—",
+        })),
     [store.teamPayments, store.teamMembers, from, to, search],
   );
 
@@ -324,14 +373,23 @@ function ReportsPage() {
     const suppOutstandingRows = groupOutstanding(purchaseRows, store.parties, "supplier");
     const custOutstandingTotal = custOutstandingRows.reduce((s, r) => s + r.pending, 0);
     const suppOutstandingTotal = suppOutstandingRows.reduce((s, r) => s + r.pending, 0);
-    const pendingRows = [...salesRows.filter((v) => v.pending > 0), ...purchaseRows.filter((v) => v.pending > 0)];
+    const pendingRows = [
+      ...salesRows.filter((v) => v.pending > 0),
+      ...purchaseRows.filter((v) => v.pending > 0),
+    ];
     const pendingTotal = pendingRows.reduce(
       (s, v: any) => s + ("invoice" in v ? v.pending : v.pending),
       0,
     );
     const advancePayRows = [
-      ...salesModel.payments.filter((p) => p.advance > 0 && inRange(p.date) && (partyFilter === "all" || p.partyId === partyFilter)),
-      ...purchaseModel.payments.filter((p) => p.advance > 0 && inRange(p.date) && (partyFilter === "all" || p.partyId === partyFilter)),
+      ...salesModel.payments.filter(
+        (p) =>
+          p.advance > 0 && inRange(p.date) && (partyFilter === "all" || p.partyId === partyFilter),
+      ),
+      ...purchaseModel.payments.filter(
+        (p) =>
+          p.advance > 0 && inRange(p.date) && (partyFilter === "all" || p.partyId === partyFilter),
+      ),
     ];
     const advanceTotal = advancePayRows.reduce((s, p) => s + p.advance, 0);
     const uchhinaTotal = uchhinaFilteredRows.reduce((s, r) => s + r.amount, 0);
@@ -342,6 +400,53 @@ function ReportsPage() {
     const sellerTop = sellerGroupsData[0];
     const platformTop = platformGroupsData[0];
     const teamPaid = teamRows.filter((p) => p.paid).reduce((s, p) => s + p.amount, 0);
+
+    const sumBy = <T,>(rows: T[], keyFn: (r: T) => string, valFn: (r: T) => number) => {
+      const map = new Map<string, number>();
+      for (const r of rows) {
+        const k = keyFn(r) || "Unknown";
+        map.set(k, (map.get(k) ?? 0) + valFn(r));
+      }
+      return [...map.entries()]
+        .map(([label, value]) => ({ label, value: round2(value) }))
+        .sort((a, b) => b.value - a.value);
+    };
+    const topCustomersData = sumBy(
+      salesRows,
+      (v) => v.customer?.name ?? "Unknown",
+      (v) => v.invoice.total,
+    ).slice(0, 8);
+    const customerCountryData = sumBy(
+      salesRows,
+      (v) => v.customer?.country?.trim() || "Unknown",
+      (v) => v.invoice.total,
+    );
+    const diamondVsJewelryData = sumBy(
+      salesRows,
+      (v) => (v.invoice.invoiceKind === "jewelry" ? "Jewellery" : "Diamond"),
+      (v) => v.invoice.total,
+    );
+    const goodsMap = new Map<string, { qty: number; value: number }>();
+    for (const v of salesRows) {
+      for (const l of v.invoice.lines ?? []) {
+        const key = l.description?.trim() || "Diamond item";
+        const entry = goodsMap.get(key) ?? { qty: 0, value: 0 };
+        entry.qty += l.quantity || l.pcs || 0;
+        entry.value += (l.carat || l.quantity || 1) * (l.rate || 0);
+        goodsMap.set(key, entry);
+      }
+      for (const j of v.invoice.jewelryItems ?? []) {
+        const key = j.description?.trim() || "Jewelry item";
+        const entry = goodsMap.get(key) ?? { qty: 0, value: 0 };
+        entry.qty += 1;
+        entry.value += j.total || 0;
+        goodsMap.set(key, entry);
+      }
+    }
+    const mostSoldGoodsData = [...goodsMap.entries()]
+      .map(([label, v]) => ({ label, qty: round2(v.qty), value: round2(v.value) }))
+      .sort((a, b) => b.value - a.value)
+      .slice(0, 8);
 
     const list: ReportDef[] = [
       {
@@ -365,7 +470,11 @@ function ReportsPage() {
             pending: v.pending,
             status: STATUS_LABEL[v.status as InvoiceStatus],
           })),
-          totals: { total: salesTotal, settled: salesRows.reduce((s, v) => s + v.received, 0), pending: salesRows.reduce((s, v) => s + v.pending, 0) },
+          totals: {
+            total: salesTotal,
+            settled: salesRows.reduce((s, v) => s + v.received, 0),
+            pending: salesRows.reduce((s, v) => s + v.pending, 0),
+          },
         }),
       },
       {
@@ -389,7 +498,11 @@ function ReportsPage() {
             pending: v.pending,
             status: STATUS_LABEL[v.status as InvoiceStatus],
           })),
-          totals: { total: purchasesTotal, settled: purchaseRows.reduce((s, v) => s + v.paid, 0), pending: purchaseRows.reduce((s, v) => s + v.pending, 0) },
+          totals: {
+            total: purchasesTotal,
+            settled: purchaseRows.reduce((s, v) => s + v.paid, 0),
+            pending: purchaseRows.reduce((s, v) => s + v.pending, 0),
+          },
         }),
       },
       {
@@ -657,7 +770,13 @@ function ReportsPage() {
             { key: "balance", label: "Balance", money: true },
           ],
           rows: [
-            ...capitalViews.map((v) => ({ name: v.label, type: "Capital", in: v.invested, out: v.withdrawn, balance: v.balance })),
+            ...capitalViews.map((v) => ({
+              name: v.label,
+              type: "Capital",
+              in: v.invested,
+              out: v.withdrawn,
+              balance: v.balance,
+            })),
             ...liabilityViews.map((v) => ({
               name: v.liability.name,
               type: liabilityKindLabel(v.liability.kind),
@@ -688,8 +807,24 @@ function ReportsPage() {
             { key: "value", label: "Value", money: true },
           ],
           rows: [
-            ...stockDiamond.rows.map((r) => ({ stock: "Diamond", date: r.date, description: r.description, qtyIn: r.qtyIn, qtyOut: r.qtyOut, balance: r.balance, value: r.value })),
-            ...stockGold.rows.map((r) => ({ stock: "Gold", date: r.date, description: r.description, qtyIn: r.qtyIn, qtyOut: r.qtyOut, balance: r.balance, value: r.value })),
+            ...stockDiamond.rows.map((r) => ({
+              stock: "Diamond",
+              date: r.date,
+              description: r.description,
+              qtyIn: r.qtyIn,
+              qtyOut: r.qtyOut,
+              balance: r.balance,
+              value: r.value,
+            })),
+            ...stockGold.rows.map((r) => ({
+              stock: "Gold",
+              date: r.date,
+              description: r.description,
+              qtyIn: r.qtyIn,
+              qtyOut: r.qtyOut,
+              balance: r.balance,
+              value: r.value,
+            })),
           ],
           totals: { value: stockValue },
         }),
@@ -711,7 +846,13 @@ function ReportsPage() {
             { key: "received", label: "Received", money: true },
             { key: "pending", label: "Pending", money: true },
           ],
-          rows: sellerGroupsData.map((g) => ({ label: g.label, count: g.count, sales: g.sales, received: g.received, pending: g.pending })),
+          rows: sellerGroupsData.map((g) => ({
+            label: g.label,
+            count: g.count,
+            sales: g.sales,
+            received: g.received,
+            pending: g.pending,
+          })),
         }),
       },
       {
@@ -731,7 +872,86 @@ function ReportsPage() {
             { key: "received", label: "Received", money: true },
             { key: "pending", label: "Pending", money: true },
           ],
-          rows: platformGroupsData.map((g) => ({ label: g.label, count: g.count, sales: g.sales, received: g.received, pending: g.pending })),
+          rows: platformGroupsData.map((g) => ({
+            label: g.label,
+            count: g.count,
+            sales: g.sales,
+            received: g.received,
+            pending: g.pending,
+          })),
+        }),
+      },
+      {
+        key: "topCustomers",
+        label: "Top Customers",
+        icon: Users,
+        tone: "purple",
+        headline: topCustomersData[0] ? formatMoney(topCustomersData[0].value) : formatMoney(0),
+        hint: topCustomersData[0]?.label ?? "No sales yet",
+        build: () => ({
+          title: "Top Customers",
+          subtitle: `${formatDate(from)} – ${formatDate(to)}`,
+          columns: [
+            { key: "label", label: "Customer" },
+            { key: "value", label: "Sales", money: true },
+          ],
+          rows: topCustomersData.map((r) => ({ label: r.label, value: r.value })),
+          totals: { value: topCustomersData.reduce((s, r) => s + r.value, 0) },
+        }),
+      },
+      {
+        key: "customerCountry",
+        label: "Customer Value by Country",
+        icon: Users,
+        tone: "blue",
+        headline: customerCountryData[0] ? formatMoney(customerCountryData[0].value) : formatMoney(0),
+        hint: customerCountryData[0]?.label ?? "No sales yet",
+        build: () => ({
+          title: "Customer Value by Country",
+          subtitle: `${formatDate(from)} – ${formatDate(to)}`,
+          columns: [
+            { key: "label", label: "Country" },
+            { key: "value", label: "Sales", money: true },
+          ],
+          rows: customerCountryData.map((r) => ({ label: r.label, value: r.value })),
+          totals: { value: customerCountryData.reduce((s, r) => s + r.value, 0) },
+        }),
+      },
+      {
+        key: "mostSoldGoods",
+        label: "Most-Sold Goods",
+        icon: Gem,
+        tone: "yellow",
+        headline: mostSoldGoodsData[0] ? formatMoney(mostSoldGoodsData[0].value) : formatMoney(0),
+        hint: mostSoldGoodsData[0]?.label ?? "No sales yet",
+        build: () => ({
+          title: "Most-Sold Goods",
+          subtitle: `${formatDate(from)} – ${formatDate(to)} (approx. value)`,
+          columns: [
+            { key: "label", label: "Item" },
+            { key: "qty", label: "Qty", align: "right" },
+            { key: "value", label: "Value", money: true },
+          ],
+          rows: mostSoldGoodsData.map((r) => ({ label: r.label, qty: r.qty, value: r.value })),
+          totals: { value: mostSoldGoodsData.reduce((s, r) => s + r.value, 0) },
+        }),
+      },
+      {
+        key: "diamondVsJewelry",
+        label: "Diamond vs Jewellery Share",
+        icon: Gem,
+        tone: "navy",
+        headline: diamondVsJewelryData[0] ? formatMoney(diamondVsJewelryData[0].value) : formatMoney(0),
+        hint: diamondVsJewelryData[0]?.label ?? "No sales yet",
+        build: () => ({
+          title: "Diamond vs Jewellery Share",
+          subtitle: `${formatDate(from)} – ${formatDate(to)}`,
+          columns: [
+            { key: "label", label: "Kind" },
+            { key: "value", label: "Sales", money: true },
+          ],
+          rows: diamondVsJewelryData.map((r) => ({ label: r.label, value: r.value })),
+          totals: { value: diamondVsJewelryData.reduce((s, r) => s + r.value, 0) },
         }),
       },
       {
@@ -792,12 +1012,15 @@ function ReportsPage() {
   const active = reports.find((r) => r.key === viewKey) ?? null;
   const activeTable = active ? active.build() : null;
 
-  const filtersActive = accountFilter !== "all" || partyFilter !== "all" || statusFilter !== "all" || !!search;
+  const filtersActive =
+    accountFilter !== "all" || partyFilter !== "all" || statusFilter !== "all" || !!search;
 
   return (
-    <div className="space-y-4 pb-8">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h1 className="text-xl font-bold text-navy sm:text-2xl">Reports &amp; Analysis</h1>
+    <div className="w-full max-w-full space-y-4 overflow-x-hidden pb-8">
+      <div className="min-w-0">
+        <h1 className="truncate text-lg font-bold text-navy sm:text-xl lg:text-2xl">
+          Reports &amp; Analysis
+        </h1>
       </div>
 
       <FilterBar
@@ -825,14 +1048,16 @@ function ReportsPage() {
       />
 
       <Tabs value={tab} onValueChange={(v) => setTab(v as "centre" | "analysis")}>
-        <TabsList>
-          <TabsTrigger value="centre">Report Centre</TabsTrigger>
-          <TabsTrigger value="analysis">Analysis</TabsTrigger>
+        <TabsList className="grid h-auto w-full grid-cols-2 gap-1 sm:flex sm:h-9 sm:w-auto sm:flex-wrap">
+          <TabsTrigger value="centre" className="text-xs sm:text-sm">
+            Report Centre
+          </TabsTrigger>
+          <TabsTrigger value="analysis" className="text-xs sm:text-sm">
+            Analysis
+          </TabsTrigger>
         </TabsList>
         <TabsContent value="centre">
-          {tab === "centre" ? (
-            <ReportCentre reports={reports} onView={setViewKey} />
-          ) : null}
+          {tab === "centre" ? <ReportCentre reports={reports} onView={setViewKey} /> : null}
         </TabsContent>
         <TabsContent value="analysis">
           {tab === "analysis" ? (
@@ -846,6 +1071,8 @@ function ReportsPage() {
               stockDiamond={stockDiamond}
               stockGold={stockGold}
               today={today}
+              from={from}
+              to={to}
               onView={setViewKey}
             />
           ) : null}
@@ -921,10 +1148,18 @@ function FilterBar(props: {
   const partyLabelOf = parties.find((p) => p.id === partyFilter)?.name;
 
   return (
-    <div className="space-y-2 rounded-xl border border-border bg-card p-3 shadow-sm">
-      <div className="flex flex-wrap items-center gap-2">
+    <div className="w-full max-w-full space-y-2 rounded-xl border border-border bg-card p-3 shadow-sm">
+      <div className="relative min-w-0 sm:hidden">
+        <Input
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search…"
+          className="h-9 w-full text-xs"
+        />
+      </div>
+      <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:items-center">
         <Select value={preset} onValueChange={(v) => setPreset(v as Preset)}>
-          <SelectTrigger aria-label="Date period" className="h-9 w-[150px] text-xs">
+          <SelectTrigger aria-label="Date period" className="h-9 w-full text-xs sm:w-[150px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -937,9 +1172,19 @@ function FilterBar(props: {
         </Select>
         {preset === "custom" ? (
           <div className="flex items-center gap-1">
-            <Input type="date" value={customFrom} onChange={(e) => setCustomFrom(e.target.value)} className="h-9 w-[130px] text-xs" />
-            <span className="text-xs text-muted-foreground">to</span>
-            <Input type="date" value={customTo} onChange={(e) => setCustomTo(e.target.value)} className="h-9 w-[130px] text-xs" />
+            <Input
+              type="date"
+              value={customFrom}
+              onChange={(e) => setCustomFrom(e.target.value)}
+              className="h-9 w-full text-xs sm:w-[130px]"
+            />
+            <span className="shrink-0 text-xs text-muted-foreground">to</span>
+            <Input
+              type="date"
+              value={customTo}
+              onChange={(e) => setCustomTo(e.target.value)}
+              className="h-9 w-full text-xs sm:w-[130px]"
+            />
           </div>
         ) : null}
         <Select
@@ -952,7 +1197,7 @@ function FilterBar(props: {
             setPreset("custom");
           }}
         >
-          <SelectTrigger aria-label="Financial year" className="h-9 w-[130px] text-xs">
+          <SelectTrigger aria-label="Financial year" className="h-9 w-full text-xs sm:w-[130px]">
             <SelectValue placeholder="Financial Year" />
           </SelectTrigger>
           <SelectContent>
@@ -967,7 +1212,7 @@ function FilterBar(props: {
           </SelectContent>
         </Select>
         <Select value={accountFilter} onValueChange={setAccountFilter}>
-          <SelectTrigger aria-label="Account" className="h-9 w-[150px] text-xs">
+          <SelectTrigger aria-label="Account" className="h-9 w-full text-xs sm:w-[150px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -980,7 +1225,7 @@ function FilterBar(props: {
           </SelectContent>
         </Select>
         <Select value={partyFilter} onValueChange={setPartyFilter}>
-          <SelectTrigger aria-label="Customer / Supplier" className="h-9 w-[160px] text-xs">
+          <SelectTrigger aria-label="Customer / Supplier" className="h-9 w-full text-xs sm:w-[160px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -992,8 +1237,11 @@ function FilterBar(props: {
             ))}
           </SelectContent>
         </Select>
-        <Select value={statusFilter} onValueChange={(v) => setStatusFilter(v as "all" | InvoiceStatus)}>
-          <SelectTrigger aria-label="Status" className="h-9 w-[130px] text-xs">
+        <Select
+          value={statusFilter}
+          onValueChange={(v) => setStatusFilter(v as "all" | InvoiceStatus)}
+        >
+          <SelectTrigger aria-label="Status" className="h-9 w-full text-xs sm:w-[130px]">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -1008,7 +1256,7 @@ function FilterBar(props: {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Search…"
-          className="h-9 min-w-[160px] flex-1 text-xs sm:flex-none sm:w-[200px]"
+          className="hidden h-9 text-xs sm:block sm:w-[200px]"
         />
       </div>
       {filtersActive || accountLabelOf || partyLabelOf ? (
@@ -1029,7 +1277,11 @@ function FilterBar(props: {
           ) : null}
           {search ? <RemovableChip onRemove={() => setSearch("")}>"{search}"</RemovableChip> : null}
           {filtersActive ? (
-            <button type="button" onClick={clearAll} className="text-[11px] font-medium text-navy underline">
+            <button
+              type="button"
+              onClick={clearAll}
+              className="text-[11px] font-medium text-navy underline"
+            >
               Clear all
             </button>
           ) : null}
@@ -1039,7 +1291,13 @@ function FilterBar(props: {
   );
 }
 
-function RemovableChip({ children, onRemove }: { children: React.ReactNode; onRemove: () => void }) {
+function RemovableChip({
+  children,
+  onRemove,
+}: {
+  children: React.ReactNode;
+  onRemove: () => void;
+}) {
   return (
     <span className="inline-flex items-center gap-1 rounded-md bg-sl-total-bg px-2 py-0.5 text-[11px] font-medium text-sl-total">
       {children}
@@ -1052,16 +1310,32 @@ function RemovableChip({ children, onRemove }: { children: React.ReactNode; onRe
 
 /* ---------------- report centre ---------------- */
 
-function ReportCentre({ reports, onView }: { reports: ReportDef[]; onView: (key: string) => void }) {
+function ReportCentre({
+  reports,
+  onView,
+}: {
+  reports: ReportDef[];
+  onView: (key: string) => void;
+}) {
   return (
     <div className="grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2 xl:grid-cols-3">
       {reports.map((r) => {
         const Icon = r.icon;
         return (
           <div key={r.key} className="rounded-xl border border-border bg-card p-3 shadow-sm">
-            <StatCard label={r.label} value={r.headline} hint={r.hint} tone={r.tone} icon={<Icon className="size-4" />} />
+            <StatCard
+              label={r.label}
+              value={r.headline}
+              hint={r.hint}
+              tone={r.tone}
+              icon={<Icon className="size-4" />}
+            />
             <div className="mt-2 flex items-center justify-between gap-2">
-              <button type="button" onClick={() => onView(r.key)} className="text-xs font-semibold text-navy underline">
+              <button
+                type="button"
+                onClick={() => onView(r.key)}
+                className="text-xs font-semibold text-navy underline"
+              >
                 View
               </button>
               <DownloadMenu build={r.build} label="" size="sm" />
@@ -1083,7 +1357,11 @@ function ReportCentre({ reports, onView }: { reports: ReportDef[]; onView: (key:
 function ReportTable({ table }: { table: ExportTable }) {
   const paged = usePaged(table.rows, 25);
   if (!table.rows.length) {
-    return <p className="py-8 text-center text-sm text-muted-foreground">No data for the selected filters.</p>;
+    return (
+      <p className="py-8 text-center text-sm text-muted-foreground">
+        No data for the selected filters.
+      </p>
+    );
   }
   const cell = (col: ExportTable["columns"][number], row: Record<string, unknown>) => {
     const v = row[col.key];
@@ -1108,7 +1386,13 @@ function ReportTable({ table }: { table: ExportTable }) {
           <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
             <tr>
               {table.columns.map((c) => (
-                <th key={c.key} className={cn("px-3 py-2 text-left font-semibold", (c.align === "right" || c.money) && "text-right")}>
+                <th
+                  key={c.key}
+                  className={cn(
+                    "px-3 py-2 text-left font-semibold",
+                    (c.align === "right" || c.money) && "text-right",
+                  )}
+                >
                   {c.label}
                 </th>
               ))}
@@ -1118,7 +1402,13 @@ function ReportTable({ table }: { table: ExportTable }) {
             {paged.slice.map((row, i) => (
               <tr key={i} className="border-t border-border">
                 {table.columns.map((c) => (
-                  <td key={c.key} className={cn("px-3 py-2", (c.align === "right" || c.money) && "num text-right")}>
+                  <td
+                    key={c.key}
+                    className={cn(
+                      "px-3 py-2",
+                      (c.align === "right" || c.money) && "num text-right",
+                    )}
+                  >
                     {cell(c, row)}
                   </td>
                 ))}
@@ -1129,8 +1419,16 @@ function ReportTable({ table }: { table: ExportTable }) {
             <tfoot>
               <tr className="border-t-2 border-gold bg-muted/40 font-semibold">
                 {table.columns.map((c) => (
-                  <td key={c.key} className={cn("px-3 py-2", (c.align === "right" || c.money) && "num text-right")}>
-                    {table.totals?.[c.key] !== undefined ? cell(c, table.totals as Record<string, unknown>) : ""}
+                  <td
+                    key={c.key}
+                    className={cn(
+                      "px-3 py-2",
+                      (c.align === "right" || c.money) && "num text-right",
+                    )}
+                  >
+                    {table.totals?.[c.key] !== undefined
+                      ? cell(c, table.totals as Record<string, unknown>)
+                      : ""}
                   </td>
                 ))}
               </tr>
@@ -1144,13 +1442,21 @@ function ReportTable({ table }: { table: ExportTable }) {
             {table.columns.map((c) => (
               <div key={c.key} className="flex items-center justify-between gap-2 py-0.5 text-xs">
                 <span className="text-muted-foreground">{c.label}</span>
-                <span className={cn("text-right font-medium text-navy", c.money && "num")}>{cell(c, row)}</span>
+                <span className={cn("text-right font-medium text-navy", c.money && "num")}>
+                  {cell(c, row)}
+                </span>
               </div>
             ))}
           </div>
         ))}
       </div>
-      <Pager page={paged.page} pages={paged.pages} total={paged.total} next={paged.next} prev={paged.prev} />
+      <Pager
+        page={paged.page}
+        pages={paged.pages}
+        total={paged.total}
+        next={paged.next}
+        prev={paged.prev}
+      />
     </div>
   );
 }
@@ -1158,11 +1464,20 @@ function ReportTable({ table }: { table: ExportTable }) {
 /* ---------------- outstanding grouping helper ---------------- */
 
 function groupOutstanding(
-  rows: { pending: number; received?: number; paid?: number; invoice?: { partyId: string; total: number }; bill?: { partyId: string; total: number } }[],
+  rows: {
+    pending: number;
+    received?: number;
+    paid?: number;
+    invoice?: { partyId: string; total: number };
+    bill?: { partyId: string; total: number };
+  }[],
   parties: { id: string; name: string }[],
   _kind: "customer" | "supplier",
 ) {
-  const map = new Map<string, { name: string; count: number; total: number; settled: number; pending: number }>();
+  const map = new Map<
+    string,
+    { name: string; count: number; total: number; settled: number; pending: number }
+  >();
   for (const r of rows as any[]) {
     const partyId: string = r.invoice ? r.invoice.partyId : r.bill.partyId;
     const total: number = r.invoice ? r.invoice.total : r.bill.total;
@@ -1185,6 +1500,28 @@ function groupOutstanding(
 
 /* ---------------- analysis tab ---------------- */
 
+const PIE_COLORS = [
+  "var(--color-chart-1)",
+  "var(--color-chart-2)",
+  "var(--color-chart-3)",
+  "var(--color-chart-4)",
+  "var(--color-chart-5)",
+  "#8fb4e3",
+  "#c9a7e8",
+  "#f2b8c6",
+];
+
+function sumByLabel<T>(rows: T[], keyFn: (r: T) => string, valFn: (r: T) => number) {
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    const k = keyFn(r) || "Unknown";
+    map.set(k, (map.get(k) ?? 0) + valFn(r));
+  }
+  return [...map.entries()]
+    .map(([label, value]) => ({ label, value: round2(value) }))
+    .sort((a, b) => b.value - a.value);
+}
+
 function Analysis({
   plModel,
   salesRows,
@@ -1206,6 +1543,8 @@ function Analysis({
   stockDiamond: ReturnType<typeof buildStockView>;
   stockGold: ReturnType<typeof buildStockView>;
   today: string;
+  from?: string;
+  to?: string;
   onView: (key: string) => void;
 }) {
   const salesTotal = salesRows.reduce((s, v) => s + v.invoice.total, 0);
@@ -1219,7 +1558,9 @@ function Analysis({
     const pending = v.pending;
     if (pending <= 0) continue;
     const due = "invoice" in v ? v.invoice.dueDate : (v as any).bill.dueDate;
-    const days = due ? Math.floor((new Date(today).getTime() - new Date(due).getTime()) / 86400000) : 0;
+    const days = due
+      ? Math.floor((new Date(today).getTime() - new Date(due).getTime()) / 86400000)
+      : 0;
     if (days <= 30) aging.b0 += pending;
     else if (days <= 60) aging.b30 += pending;
     else if (days <= 90) aging.b60 += pending;
@@ -1237,6 +1578,56 @@ function Analysis({
 
   const stockValue = stockDiamond.totalValue + stockGold.totalValue;
 
+  const monthMap = new Map<string, { sales: number; purchases: number; expenses: number }>();
+  const bucket = (d: string) => {
+    const key = d.slice(0, 7);
+    const entry = monthMap.get(key) ?? { sales: 0, purchases: 0, expenses: 0 };
+    monthMap.set(key, entry);
+    return entry;
+  };
+  for (const v of salesRows) bucket(v.invoice.date).sales += v.invoice.total;
+  for (const v of purchaseRows) bucket(v.bill.date).purchases += v.bill.total;
+  for (const t of expenseTx) bucket(t.date).expenses += t.amount;
+  const trendData = [...monthMap.entries()]
+    .sort((a, b) => a[0].localeCompare(b[0]))
+    .map(([key, v]) => ({
+      label: key,
+      sales: round2(v.sales),
+      purchases: round2(v.purchases),
+      profit: round2(v.sales - v.purchases - v.expenses),
+    }));
+
+  const topCustomers = sumByLabel(
+    salesRows,
+    (v) => v.customer?.name ?? "Unknown",
+    (v) => v.invoice.total,
+  ).slice(0, 8);
+  const customerCountry = sumByLabel(
+    salesRows,
+    (v) => v.customer?.country?.trim() || "Unknown",
+    (v) => v.invoice.total,
+  );
+  const diamondVsJewelry = sumByLabel(
+    salesRows,
+    (v) => (v.invoice.invoiceKind === "jewelry" ? "Jewellery" : "Diamond"),
+    (v) => v.invoice.total,
+  );
+  const goodsAgg = new Map<string, number>();
+  for (const v of salesRows) {
+    for (const l of v.invoice.lines ?? []) {
+      const key = l.description?.trim() || "Diamond item";
+      goodsAgg.set(key, (goodsAgg.get(key) ?? 0) + (l.carat || l.quantity || 1) * (l.rate || 0));
+    }
+    for (const j of v.invoice.jewelryItems ?? []) {
+      const key = j.description?.trim() || "Jewelry item";
+      goodsAgg.set(key, (goodsAgg.get(key) ?? 0) + (j.total || 0));
+    }
+  }
+  const mostSoldGoods = [...goodsAgg.entries()]
+    .map(([label, value]) => ({ label, value: round2(value) }))
+    .sort((a, b) => b.value - a.value)
+    .slice(0, 8);
+
   return (
     <div className="grid grid-cols-1 gap-3 pt-3 sm:grid-cols-2 xl:grid-cols-3">
       <AnalysisCard title="Sales vs Purchases" onClick={() => onView("sales")}>
@@ -1245,18 +1636,48 @@ function Analysis({
       </AnalysisCard>
 
       <AnalysisCard title="Gross & Net Profit" onClick={() => onView("pl")}>
-        <BarRow label="Gross Profit" value={plModel.gross} max={Math.max(Math.abs(plModel.gross), Math.abs(plModel.net), 1)} tone="green" />
-        <BarRow label="Net Profit" value={plModel.net} max={Math.max(Math.abs(plModel.gross), Math.abs(plModel.net), 1)} tone="navy" />
+        <BarRow
+          label="Gross Profit"
+          value={plModel.gross}
+          max={Math.max(Math.abs(plModel.gross), Math.abs(plModel.net), 1)}
+          tone="green"
+        />
+        <BarRow
+          label="Net Profit"
+          value={plModel.net}
+          max={Math.max(Math.abs(plModel.gross), Math.abs(plModel.net), 1)}
+          tone="navy"
+        />
       </AnalysisCard>
 
       <AnalysisCard title="Income vs Expenses" onClick={() => onView("expenses")}>
-        <BarRow label="Income" value={salesTotal} max={Math.max(salesTotal, plModel.expenses, 1)} tone="blue" />
-        <BarRow label="Expenses" value={plModel.expenses} max={Math.max(salesTotal, plModel.expenses, 1)} tone="red" />
+        <BarRow
+          label="Income"
+          value={salesTotal}
+          max={Math.max(salesTotal, plModel.expenses, 1)}
+          tone="blue"
+        />
+        <BarRow
+          label="Expenses"
+          value={plModel.expenses}
+          max={Math.max(salesTotal, plModel.expenses, 1)}
+          tone="red"
+        />
       </AnalysisCard>
 
       <AnalysisCard title="Sales — Paid vs Pending" onClick={() => onView("sales")}>
-        <BarRow label="Received" value={receivedTotal} max={Math.max(receivedTotal, pendingTotal, 1)} tone="green" />
-        <BarRow label="Pending" value={pendingTotal} max={Math.max(receivedTotal, pendingTotal, 1)} tone="red" />
+        <BarRow
+          label="Received"
+          value={receivedTotal}
+          max={Math.max(receivedTotal, pendingTotal, 1)}
+          tone="green"
+        />
+        <BarRow
+          label="Pending"
+          value={pendingTotal}
+          max={Math.max(receivedTotal, pendingTotal, 1)}
+          tone="red"
+        />
       </AnalysisCard>
 
       <AnalysisCard title="Customer / Supplier Aging" onClick={() => onView("pending")}>
@@ -1268,9 +1689,17 @@ function Analysis({
 
       <AnalysisCard title="Seller Performance" onClick={() => onView("sellerWise")}>
         {sellerGroupsData.slice(0, 5).map((g) => (
-          <BarRow key={g.key} label={g.label} value={g.sales} max={sellerGroupsData[0]?.sales || 1} tone="blue" />
+          <BarRow
+            key={g.key}
+            label={g.label}
+            value={g.sales}
+            max={sellerGroupsData[0]?.sales || 1}
+            tone="blue"
+          />
         ))}
-        {!sellerGroupsData.length ? <p className="text-xs text-muted-foreground">No data.</p> : null}
+        {!sellerGroupsData.length ? (
+          <p className="text-xs text-muted-foreground">No data.</p>
+        ) : null}
       </AnalysisCard>
 
       <AnalysisCard title="Platform Performance" onClick={() => onView("platformWise")}>
@@ -1278,9 +1707,17 @@ function Analysis({
           .filter((g) => g.sales > 0)
           .slice(0, 5)
           .map((g) => (
-            <BarRow key={g.key} label={g.label} value={g.sales} max={platformGroupsData[0]?.sales || 1} tone="purple" />
+            <BarRow
+              key={g.key}
+              label={g.label}
+              value={g.sales}
+              max={platformGroupsData[0]?.sales || 1}
+              tone="purple"
+            />
           ))}
-        {!platformGroupsData.some((g) => g.sales > 0) ? <p className="text-xs text-muted-foreground">No data.</p> : null}
+        {!platformGroupsData.some((g) => g.sales > 0) ? (
+          <p className="text-xs text-muted-foreground">No data.</p>
+        ) : null}
       </AnalysisCard>
 
       <AnalysisCard title="Highest Expense Categories" onClick={() => onView("expenses")}>
@@ -1291,19 +1728,216 @@ function Analysis({
       </AnalysisCard>
 
       <AnalysisCard title="Stock Value" onClick={() => onView("stock")}>
-        <BarRow label="Diamond" value={stockDiamond.totalValue} max={Math.max(stockValue, 1)} tone="blue" />
-        <BarRow label="Gold" value={stockGold.totalValue} max={Math.max(stockValue, 1)} tone="yellow" />
+        <BarRow
+          label="Diamond"
+          value={stockDiamond.totalValue}
+          max={Math.max(stockValue, 1)}
+          tone="blue"
+        />
+        <BarRow
+          label="Gold"
+          value={stockGold.totalValue}
+          max={Math.max(stockValue, 1)}
+          tone="yellow"
+        />
+      </AnalysisCard>
+
+      <AnalysisCard title="Sales & Profit Trend" onClick={() => onView("sales")} wide>
+        {trendData.length ? (
+          <div className="h-48 w-full sm:h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={trendData} margin={{ top: 4, right: 8, left: -18, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" className="stroke-border/50" />
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                <RTooltip formatter={(v: number) => formatMoney(v)} />
+                <Line
+                  type="monotone"
+                  dataKey="sales"
+                  stroke="var(--color-chart-1)"
+                  strokeWidth={2}
+                  dot={{ r: 2, onClick: () => onView("sales") }}
+                  name="Sales"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="purchases"
+                  stroke="var(--color-chart-4)"
+                  strokeWidth={2}
+                  dot={{ r: 2, onClick: () => onView("purchases") }}
+                  name="Purchases"
+                />
+                <Line
+                  type="monotone"
+                  dataKey="profit"
+                  stroke="var(--color-chart-3)"
+                  strokeWidth={2}
+                  dot={{ r: 2, onClick: () => onView("pl") }}
+                  name="Net Profit"
+                />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No data for the selected period.</p>
+        )}
+      </AnalysisCard>
+
+      <AnalysisCard title="Top Customers" onClick={() => onView("topCustomers")}>
+        {topCustomers.length ? (
+          <div className="h-44 w-full sm:h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={topCustomers}
+                layout="vertical"
+                margin={{ top: 0, right: 8, left: 0, bottom: 0 }}
+              >
+                <XAxis type="number" tick={{ fontSize: 10 }} hide />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  width={90}
+                  tick={{ fontSize: 10 }}
+                  interval={0}
+                />
+                <RTooltip formatter={(v: number) => formatMoney(v)} />
+                <Bar
+                  dataKey="value"
+                  radius={[0, 4, 4, 0]}
+                  onClick={() => onView("topCustomers")}
+                  cursor="pointer"
+                >
+                  {topCustomers.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No sales yet.</p>
+        )}
+      </AnalysisCard>
+
+      <AnalysisCard title="Customer Value by Country" onClick={() => onView("customerCountry")}>
+        {customerCountry.length ? (
+          <div className="h-44 w-full sm:h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={customerCountry}
+                  dataKey="value"
+                  nameKey="label"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={70}
+                  onClick={() => onView("customerCountry")}
+                  cursor="pointer"
+                  label={({ label }: { label: string }) => label}
+                  labelLine={false}
+                >
+                  {customerCountry.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <RTooltip formatter={(v: number) => formatMoney(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No sales yet.</p>
+        )}
+      </AnalysisCard>
+
+      <AnalysisCard title="Most-Sold Goods" onClick={() => onView("mostSoldGoods")}>
+        {mostSoldGoods.length ? (
+          <div className="h-44 w-full sm:h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart
+                data={mostSoldGoods}
+                layout="vertical"
+                margin={{ top: 0, right: 8, left: 0, bottom: 0 }}
+              >
+                <XAxis type="number" tick={{ fontSize: 10 }} hide />
+                <YAxis
+                  type="category"
+                  dataKey="label"
+                  width={90}
+                  tick={{ fontSize: 10 }}
+                  interval={0}
+                />
+                <RTooltip formatter={(v: number) => formatMoney(v)} />
+                <Bar
+                  dataKey="value"
+                  radius={[0, 4, 4, 0]}
+                  onClick={() => onView("mostSoldGoods")}
+                  cursor="pointer"
+                >
+                  {mostSoldGoods.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No sales yet.</p>
+        )}
+      </AnalysisCard>
+
+      <AnalysisCard title="Diamond vs Jewellery Share" onClick={() => onView("diamondVsJewelry")}>
+        {diamondVsJewelry.some((d) => d.value > 0) ? (
+          <div className="h-44 w-full sm:h-52">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie
+                  data={diamondVsJewelry}
+                  dataKey="value"
+                  nameKey="label"
+                  cx="50%"
+                  cy="50%"
+                  innerRadius={35}
+                  outerRadius={70}
+                  onClick={() => onView("diamondVsJewelry")}
+                  cursor="pointer"
+                  label={({ label }: { label: string }) => label}
+                  labelLine={false}
+                >
+                  {diamondVsJewelry.map((_, i) => (
+                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                  ))}
+                </Pie>
+                <RTooltip formatter={(v: number) => formatMoney(v)} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+        ) : (
+          <p className="text-xs text-muted-foreground">No sales yet.</p>
+        )}
       </AnalysisCard>
     </div>
   );
 }
 
-function AnalysisCard({ title, children, onClick }: { title: string; children: React.ReactNode; onClick: () => void }) {
+function AnalysisCard({
+  title,
+  children,
+  onClick,
+  wide,
+}: {
+  title: string;
+  children: React.ReactNode;
+  onClick: () => void;
+  wide?: boolean;
+}) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className="rounded-xl border border-border bg-card p-3 text-left shadow-sm transition hover:shadow-md"
+      className={cn(
+        "rounded-xl border border-border bg-card p-3 text-left shadow-sm transition hover:shadow-md",
+        wide ? "sm:col-span-2 xl:col-span-3" : "",
+      )}
     >
       <p className="mb-2 text-xs font-semibold text-navy">{title}</p>
       <div className="space-y-2">{children}</div>
@@ -1311,7 +1945,17 @@ function AnalysisCard({ title, children, onClick }: { title: string; children: R
   );
 }
 
-function BarRow({ label, value, max, tone }: { label: string; value: number; max: number; tone: Tone }) {
+function BarRow({
+  label,
+  value,
+  max,
+  tone,
+}: {
+  label: string;
+  value: number;
+  max: number;
+  tone: Tone;
+}) {
   const pct = max > 0 ? (Math.abs(value) / max) * 100 : 0;
   return (
     <div>

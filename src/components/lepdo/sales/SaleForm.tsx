@@ -22,6 +22,7 @@ import { cn } from "@/lib/utils";
 import { formatMoney, round2, todayISO, uid } from "@/lib/lepdo/format";
 import { useLepdo, type SalesInvoiceInput } from "@/lib/lepdo/store";
 import { PLATFORMS } from "@/lib/lepdo/sales";
+import { masterOptions } from "@/lib/lepdo/masters";
 import {
   DEFAULT_HSN,
   buildInvoiceDocHtml,
@@ -29,22 +30,33 @@ import {
   validateInvoice,
 } from "@/lib/lepdo/invoiceDoc";
 
-import type { InvoiceKind, JewelryItem, SaleType, StoneLine } from "@/lib/lepdo/types";
+import type {
+  DiscountMode,
+  InvoiceKind,
+  JewelryItem,
+  SaleType,
+  StoneLine,
+  SupplyLocation,
+} from "@/lib/lepdo/types";
 import { CustomerForm } from "./CustomerForm";
 import { ContactPicker } from "@/components/lepdo/ContactPicker";
-import {
-  CellLabel,
-  ColHead,
-  Combo,
-  CURRENCIES,
-  FormField,
-  KARATS,
-  METAL_COLOURS,
-  Row,
-  SALE_TYPES,
-  STONE_TYPES,
-  WIDE_MODAL_CLASS,
-} from "./ui";
+import { CellLabel, ColHead, Combo, FormField, Row, WIDE_MODAL_CLASS } from "./ui";
+import { MasterCombo } from "@/components/lepdo/shared";
+import { AutoManual, ManualBadge, MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
+
+/** Sale-type master label -> internal SaleType id. */
+const SALE_TYPE_ID: Record<string, SaleType> = {
+  UE: "ue",
+  UI: "ui",
+  "GST INR": "gst_inr",
+  EXPORT: "export",
+};
+const SALE_TYPE_LABEL: Record<string, string> = {
+  ue: "UE",
+  ui: "UI",
+  gst_inr: "GST INR",
+  export: "Export",
+};
 
 const MM_SIZES = [
   "1.0 mm",
@@ -65,6 +77,8 @@ interface DiamondRow {
   pcs: number;
   carat: number;
   rate: number;
+  manualAmount?: number | undefined;
+  manualReason: string;
 }
 
 const emptyDiamond = (): DiamondRow => ({
@@ -74,25 +88,28 @@ const emptyDiamond = (): DiamondRow => ({
   pcs: 1,
   carat: 0,
   rate: 0,
+  manualAmount: undefined,
+  manualReason: "",
 });
-
 
 const emptyStone = (): StoneLine => ({
   id: uid("st"),
-  stoneType: "Lab Grown Diamond",
+  stoneType: "Lab-Grown Diamond",
   size: "",
+  sizeMm: "",
   carat: 0,
   rate: 0,
   value: 0,
+  totalAmount: undefined,
 });
 
 const emptyJewelry = (): JewelryItem => ({
   id: uid("jw"),
   description: "",
-  karat: "14KT",
+  karat: "14K Gold",
   metalColour: "Yellow",
   netWeight: 0,
-  finePercent: 58.5,
+  finePercent: 0,
   fineGram: 0,
   metalRate: 0,
   metalValue: 0,
@@ -101,20 +118,48 @@ const emptyJewelry = (): JewelryItem => ({
   stones: [emptyStone()],
   stoneValue: 0,
   total: 0,
+  metal: "14K Gold",
+  category: "Ring",
+  grossWeight: 0,
+  stoneWeight: 0,
+  fineWeight24k: 0,
+  metalRatePerGram: 0,
+  makingRatePerGram: 0,
 });
 
+/**
+ * Gross/stone/net/24KT-fine weight and both charge rates are always typed
+ * manually — nothing here derives finePercent or fineWeight24k automatically.
+ * `manualTotal`/`manualTotalReason` (kept only in local component state, not
+ * on the persisted JewelryItem type) allow overriding the item total.
+ */
 function computeJewelry(item: JewelryItem): JewelryItem {
-  const fineGram = round2(((Number(item.netWeight) || 0) * (Number(item.finePercent) || 0)) / 100);
-  const metalValue = round2(fineGram * (Number(item.metalRate) || 0));
-  const makingValue = round2((Number(item.netWeight) || 0) * (Number(item.makingRate) || 0));
-  const stones = item.stones.map((s) => ({
-    ...s,
-    value: round2((Number(s.carat) || 0) * (Number(s.rate) || 0)),
-  }));
+  const netWeight = Number(item.netWeight) || 0;
+  const fineWeight24k = Number(item.fineWeight24k) || 0;
+  const metalRatePerGram = Number(item.metalRatePerGram) || 0;
+  const makingRatePerGram = Number(item.makingRatePerGram) || 0;
+  const metalValue = round2(fineWeight24k * metalRatePerGram);
+  const makingValue = round2(netWeight * makingRatePerGram);
+  const stones = item.stones.map((s) => {
+    const manual = s.totalAmount !== undefined && s.totalAmount !== null && s.totalAmount !== 0;
+    const value = manual
+      ? round2(Number(s.totalAmount) || 0)
+      : round2((Number(s.carat) || 0) * (Number(s.rate) || 0));
+    return { ...s, value };
+  });
   const stoneValue = round2(stones.reduce((s, x) => s + x.value, 0));
   return {
     ...item,
-    fineGram,
+    metal: item.metal ?? item.karat,
+    karat: item.metal ?? item.karat,
+    netWeight,
+    fineWeight24k,
+    metalRatePerGram,
+    makingRatePerGram,
+    // legacy mirrors so old reports / PDFs keep reading sensible numbers
+    fineGram: fineWeight24k,
+    metalRate: metalRatePerGram,
+    makingRate: makingRatePerGram,
     metalValue,
     makingValue,
     stones,
@@ -124,6 +169,25 @@ function computeJewelry(item: JewelryItem): JewelryItem {
 }
 
 type PayMode = "pending" | "part" | "full";
+
+/** Local-only manual override state per item, keyed by item id (not persisted directly). */
+interface ItemManual {
+  metal?: number | undefined;
+  metalReason: string;
+  making?: number | undefined;
+  makingReason: string;
+  total?: number | undefined;
+  totalReason: string;
+}
+
+const emptyItemManual = (): ItemManual => ({
+  metal: undefined,
+  metalReason: "",
+  making: undefined,
+  makingReason: "",
+  total: undefined,
+  totalReason: "",
+});
 
 export function SaleForm({
   open,
@@ -146,30 +210,51 @@ export function SaleForm({
   const [form, setForm] = useState({
     number: "",
     date: todayISO(),
-    dueDate: todayISO(),
+    dueDays: 15 as number | undefined,
     partyId: "",
     sellerName: "",
+    sellerIncentivePercent: undefined as number | undefined,
     platform: PLATFORMS[0] as string,
     currency: "INR",
-    exchangeRate: "1",
+    exchangeRate: 1 as number | undefined,
     saleType: "ue" as SaleType,
-    discount: "",
-    shipping: "",
+    discountMode: "fixed" as DiscountMode,
+    discountValue: undefined as number | undefined,
+    supplyLocation: "inside" as SupplyLocation,
+    taxSlab: "0",
+    shipping: undefined as number | undefined,
     notes: "",
   });
   const [diamondRows, setDiamondRows] = useState<DiamondRow[]>([emptyDiamond()]);
   const [jewelry, setJewelry] = useState<JewelryItem[]>([emptyJewelry()]);
+  const [itemManuals, setItemManuals] = useState<Record<string, ItemManual>>({});
   const [expanded, setExpanded] = useState<string | null>(null);
   const [selectedRow, setSelectedRow] = useState<string | null>(null);
   const [selectedItem, setSelectedItem] = useState<string | null>(null);
 
   const [payMode, setPayMode] = useState<PayMode>("pending");
   const [pay, setPay] = useState({
-    amount: "",
+    amount: undefined as number | undefined,
     date: todayISO(),
     account: "",
     reference: "",
   });
+
+  // summary-level manual overrides
+  const [manualSubtotal, setManualSubtotal] = useState<number | undefined>(undefined);
+  const [manualSubtotalReason, setManualSubtotalReason] = useState("");
+  const [manualDiscount, setManualDiscount] = useState<number | undefined>(undefined);
+  const [manualDiscountReason, setManualDiscountReason] = useState("");
+  const [manualShipping, setManualShipping] = useState<number | undefined>(undefined);
+  const [manualShippingReason, setManualShippingReason] = useState("");
+  const [manualGrandTotal, setManualGrandTotal] = useState<number | undefined>(undefined);
+  const [manualGrandTotalReason, setManualGrandTotalReason] = useState("");
+  const [manualReceived, setManualReceived] = useState<number | undefined>(undefined);
+  const [manualReceivedReason, setManualReceivedReason] = useState("");
+
+  const getItemManual = (id: string): ItemManual => itemManuals[id] ?? emptyItemManual();
+  const setItemManual = (id: string, patch: Partial<ItemManual>) =>
+    setItemManuals((m) => ({ ...m, [id]: { ...getItemManual(id), ...patch } }));
 
   useEffect(() => {
     if (!open) return;
@@ -177,21 +262,36 @@ export function SaleForm({
     setNumberLocked(true);
     setCustomerQuery("");
     setPayMode("pending");
-    setPay({ amount: "", date: todayISO(), account: "", reference: "" });
+    setPay({ amount: undefined, date: todayISO(), account: "", reference: "" });
+    setManualSubtotal(undefined);
+    setManualSubtotalReason("");
+    setManualDiscount(undefined);
+    setManualDiscountReason("");
+    setManualShipping(undefined);
+    setManualShippingReason("");
+    setManualGrandTotal(undefined);
+    setManualGrandTotalReason("");
+    setManualReceived(undefined);
+    setManualReceivedReason("");
+    setItemManuals({});
     if (editing) {
       setKind(editing.invoiceKind ?? "diamond");
       setForm({
         number: editing.number,
         date: editing.date,
-        dueDate: editing.dueDate ?? editing.date,
+        dueDays: editing.dueDays,
         partyId: editing.partyId,
         sellerName: editing.sellerName ?? "",
+        sellerIncentivePercent: editing.sellerIncentivePercent,
         platform: editing.platform ?? PLATFORMS[0],
         currency: editing.currency ?? "INR",
-        exchangeRate: String(editing.exchangeRate ?? 1),
+        exchangeRate: editing.exchangeRate ?? 1,
         saleType: editing.saleType ?? "ue",
-        discount: editing.discount ? String(editing.discount) : "",
-        shipping: editing.shipping ? String(editing.shipping) : "",
+        discountMode: editing.discountMode ?? "fixed",
+        discountValue: editing.discountValue ?? editing.discount ?? undefined,
+        supplyLocation: editing.supplyLocation ?? "inside",
+        taxSlab: editing.gstRate != null ? String(editing.gstRate) : "0",
+        shipping: editing.shipping || undefined,
         notes: editing.notes ?? "",
       });
       setDiamondRows(
@@ -203,6 +303,8 @@ export function SaleForm({
               pcs: l.quantity || 1,
               carat: l.carat,
               rate: l.rate,
+              manualAmount: undefined,
+              manualReason: "",
             }))
           : [emptyDiamond()],
       );
@@ -216,20 +318,22 @@ export function SaleForm({
     }
     setKind(null);
     const today = todayISO();
-    const due = new Date(today);
-    due.setUTCDate(due.getUTCDate() + 15);
     setForm({
       number: store.nextInvoiceNumber(),
       date: today,
-      dueDate: due.toISOString().slice(0, 10),
+      dueDays: 15,
       partyId: "",
       sellerName: "",
+      sellerIncentivePercent: undefined,
       platform: PLATFORMS[0],
       currency: "INR",
-      exchangeRate: "1",
+      exchangeRate: 1,
       saleType: "ue",
-      discount: "",
-      shipping: "",
+      discountMode: "fixed",
+      discountValue: undefined,
+      supplyLocation: "inside",
+      taxSlab: "0",
+      shipping: undefined,
       notes: "",
     });
     setDiamondRows([emptyDiamond()]);
@@ -238,12 +342,26 @@ export function SaleForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editId]);
 
-  const computedJewelry = useMemo(() => jewelry.map(computeJewelry), [jewelry]);
+  const computedJewelry = useMemo(
+    () =>
+      jewelry.map((j) => {
+        const auto = computeJewelry(j);
+        const m = getItemManual(j.id);
+        const metalValue = m.metal !== undefined ? round2(m.metal) : auto.metalValue;
+        const makingValue = m.making !== undefined ? round2(m.making) : auto.makingValue;
+        const autoTotal = round2(metalValue + makingValue + auto.stoneValue);
+        const total = m.total !== undefined ? round2(m.total) : autoTotal;
+        return { ...auto, metalValue, makingValue, total };
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [jewelry, itemManuals],
+  );
   const diamondTotals = useMemo(() => {
-    const rows = diamondRows.map((r) => ({
-      ...r,
-      amount: round2((Number(r.carat) || 0) * (Number(r.rate) || 0)),
-    }));
+    const rows = diamondRows.map((r) => {
+      const auto = round2((Number(r.carat) || 0) * (Number(r.rate) || 0));
+      const amount = r.manualAmount !== undefined ? round2(r.manualAmount) : auto;
+      return { ...r, autoAmount: auto, amount };
+    });
     return {
       rows,
       carat: round2(rows.reduce((s, r) => s + (Number(r.carat) || 0), 0)),
@@ -268,14 +386,36 @@ export function SaleForm({
     [computedJewelry],
   );
 
-  const subtotal = kind === "jewelry" ? jewelryTotals.subtotal : diamondTotals.subtotal;
-  const discount = round2(Number(form.discount) || 0);
-  const shipping = round2(Number(form.shipping) || 0);
-  const grandTotal = round2(Math.max(0, subtotal - discount + shipping));
-  const rate = Number(form.exchangeRate) || 0;
+  const autoSubtotal = kind === "jewelry" ? jewelryTotals.subtotal : diamondTotals.subtotal;
+  const subtotal = manualSubtotal !== undefined ? round2(manualSubtotal) : autoSubtotal;
+  const autoDiscount =
+    form.discountMode === "percent"
+      ? round2((subtotal * (toNum(form.discountValue) || 0)) / 100)
+      : round2(toNum(form.discountValue) || 0);
+  const discount = manualDiscount !== undefined ? round2(manualDiscount) : autoDiscount;
+  const autoShipping = round2(toNum(form.shipping) || 0);
+  const shipping = manualShipping !== undefined ? round2(manualShipping) : autoShipping;
+  const isGst = form.saleType === "gst_inr";
+  const taxableAmount = round2(Math.max(0, subtotal - discount + shipping));
+  const gstRate = isGst ? Number(form.taxSlab) || 0 : 0;
+  const taxAmount = isGst ? round2((taxableAmount * gstRate) / 100) : 0;
+  const cgstAmount =
+    isGst && form.supplyLocation === "inside" ? round2(taxAmount / 2) : 0;
+  const sgstAmount = cgstAmount;
+  const igstAmount = isGst && form.supplyLocation === "outside" ? taxAmount : 0;
+  const autoGrandTotal = round2(taxableAmount + taxAmount);
+  const grandTotal = manualGrandTotal !== undefined ? round2(manualGrandTotal) : autoGrandTotal;
+  const rate = toNum(form.exchangeRate) || 0;
   const isForeign = form.currency !== "INR";
   const inrTotal = isForeign ? round2(grandTotal * rate) : grandTotal;
   const payableTotal = inrTotal;
+  const dueDays = Math.max(0, Math.floor(toNum(form.dueDays) || 0));
+  const computedDueDate = useMemo(() => {
+    if (!(dueDays > 0)) return undefined;
+    const d = new Date(form.date);
+    d.setUTCDate(d.getUTCDate() + dueDays);
+    return d.toISOString().slice(0, 10);
+  }, [form.date, dueDays]);
 
   const customers = store.parties.filter(
     (p) =>
@@ -294,25 +434,25 @@ export function SaleForm({
 
   const uniq = (list: (string | undefined)[]) =>
     [...new Set(list.map((x) => (x ?? "").trim()).filter(Boolean))].sort();
-  const platformOptions = uniq([...PLATFORMS, ...store.salesInvoices.map((i) => i.platform)]);
+  const platformOptions = uniq([
+    ...PLATFORMS,
+    ...masterOptions(store.masters, "platforms"),
+    ...store.salesInvoices.map((i) => i.platform),
+  ]);
   const descriptionOptions = uniq([
+    ...masterOptions(store.masters, "productDescriptions"),
     ...store.salesInvoices.flatMap((i) => (i.lines ?? []).map((l) => l.description)),
     ...store.salesInvoices.flatMap((i) => (i.jewelryItems ?? []).map((j) => j.description)),
   ]);
-  const karatOptions = uniq([
-    ...KARATS,
-    ...store.salesInvoices.flatMap((i) => (i.jewelryItems ?? []).map((j) => j.karat)),
-  ]);
-  const colourOptions = uniq([
-    ...METAL_COLOURS,
-    ...store.salesInvoices.flatMap((i) => (i.jewelryItems ?? []).map((j) => j.metalColour)),
-  ]);
-  const stoneOptions = uniq([
-    ...STONE_TYPES,
-    ...store.salesInvoices.flatMap((i) =>
-      (i.jewelryItems ?? []).flatMap((j) => j.stones.map((s) => s.stoneType)),
-    ),
-  ]);
+  const saleTypeOptions = masterOptions(store.masters, "saleTypes");
+  /** Default rate for a currency from the "Exchange Rates" master ("USD = 84.00"). */
+  const masterRate = (code: string): string => {
+    for (const raw of masterOptions(store.masters, "exchangeRates")) {
+      const [cur, val] = raw.split("=").map((s) => s.trim());
+      if (cur && val && cur.toUpperCase() === code.toUpperCase()) return val;
+    }
+    return "";
+  };
   const sizeOptions = uniq([
     ...MM_SIZES,
     ...store.salesInvoices.flatMap((i) =>
@@ -321,10 +461,63 @@ export function SaleForm({
   ]);
   const referenceOptions = uniq(store.transactions.map((t) => t.reference));
 
-  const receivedNow =
-    payMode === "full" ? payableTotal : payMode === "part" ? round2(Number(pay.amount) || 0) : 0;
+  const autoReceived =
+    payMode === "full" ? payableTotal : payMode === "part" ? round2(toNum(pay.amount) || 0) : 0;
+  const receivedNow = manualReceived !== undefined ? round2(manualReceived) : autoReceived;
 
-  function buildPayload(): SalesInvoiceInput {
+  function manualNotes(): string {
+    const parts: string[] = [];
+    if (manualSubtotal !== undefined)
+      parts.push(
+        `Subtotal manually adjusted from ${formatMoney(autoSubtotal)} to ${formatMoney(manualSubtotal)} — ${manualSubtotalReason}`,
+      );
+    if (manualDiscount !== undefined)
+      parts.push(
+        `Discount manually adjusted from ${formatMoney(autoDiscount)} to ${formatMoney(manualDiscount)} — ${manualDiscountReason}`,
+      );
+    if (manualShipping !== undefined)
+      parts.push(
+        `Shipping manually adjusted from ${formatMoney(autoShipping)} to ${formatMoney(manualShipping)} — ${manualShippingReason}`,
+      );
+    if (manualGrandTotal !== undefined)
+      parts.push(
+        `Grand total manually adjusted from ${formatMoney(autoGrandTotal)} to ${formatMoney(manualGrandTotal)} — ${manualGrandTotalReason}`,
+      );
+    if (manualReceived !== undefined)
+      parts.push(
+        `Received amount manually adjusted from ${formatMoney(autoReceived)} to ${formatMoney(manualReceived)} — ${manualReceivedReason}`,
+      );
+    return parts.join("\n");
+  }
+
+  function findMissingManualReason(): string | null {
+    if (manualSubtotal !== undefined && !manualSubtotalReason.trim())
+      return "Enter a reason for the manually adjusted subtotal.";
+    if (manualDiscount !== undefined && !manualDiscountReason.trim())
+      return "Enter a reason for the manually adjusted discount.";
+    if (manualShipping !== undefined && !manualShippingReason.trim())
+      return "Enter a reason for the manually adjusted shipping / other amount.";
+    if (manualGrandTotal !== undefined && !manualGrandTotalReason.trim())
+      return "Enter a reason for the manually adjusted grand total.";
+    if (manualReceived !== undefined && !manualReceivedReason.trim())
+      return "Enter a reason for the manually adjusted received amount.";
+    for (const r of diamondRows) {
+      if (r.manualAmount !== undefined && !r.manualReason.trim())
+        return `Enter a reason for the manually adjusted amount on "${r.description || "an item"}".`;
+    }
+    for (const j of jewelry) {
+      const m = getItemManual(j.id);
+      if (m.metal !== undefined && !m.metalReason.trim())
+        return `Enter a reason for the manually adjusted metal value on "${j.description || "an item"}".`;
+      if (m.making !== undefined && !m.makingReason.trim())
+        return `Enter a reason for the manually adjusted making charges on "${j.description || "an item"}".`;
+      if (m.total !== undefined && !m.totalReason.trim())
+        return `Enter a reason for the manually adjusted total on "${j.description || "an item"}".`;
+    }
+    return null;
+  }
+
+  function buildPayload() {
     const lines =
       kind === "jewelry"
         ? []
@@ -336,15 +529,32 @@ export function SaleForm({
               hsnCode: r.hsnCode?.trim() || DEFAULT_HSN,
               quantity: Number(r.pcs) || 1,
               carat: Number(r.carat) || 0,
-              rate: Number(r.rate) || 0,
+              rate: r.manualAmount !== undefined && (Number(r.carat) || 0) > 0
+                ? round2(r.amount / (Number(r.carat) || 1))
+                : Number(r.rate) || 0,
             }));
+
+    const notesParts = [form.notes || "", manualNotes()].filter(Boolean);
 
     return {
       id: editing?.id,
       number: form.number,
       partyId: form.partyId,
       date: form.date,
-      dueDate: form.dueDate,
+      dueDate:
+        computedDueDate && computedDueDate !== form.date && payableTotal - receivedNow > 0.005
+          ? computedDueDate
+          : form.date,
+      dueDays: dueDays || undefined,
+      discountMode: form.discountMode,
+      discountValue: round2(toNum(form.discountValue) || 0),
+      supplyLocation: isGst ? form.supplyLocation : undefined,
+      cgstAmount: isGst ? cgstAmount : undefined,
+      sgstAmount: isGst ? sgstAmount : undefined,
+      igstAmount: isGst ? igstAmount : undefined,
+      sellerIncentivePercent: form.sellerIncentivePercent
+        ? round2(toNum(form.sellerIncentivePercent) || 0)
+        : undefined,
       sellerName: form.sellerName || undefined,
       platform: form.platform,
       invoiceKind: kind ?? "diamond",
@@ -356,18 +566,22 @@ export function SaleForm({
       saleType: form.saleType,
       currency: form.currency,
       exchangeRate: isForeign ? rate : 1,
-      gstType: form.saleType === "gst_inr" ? "igst" : "non_gst",
-      gstRate: 0,
+      gstType: isGst
+        ? form.supplyLocation === "outside"
+          ? "igst"
+          : "cgst_sgst"
+        : "non_gst",
+      gstRate,
       lines,
       subtotal: isForeign ? round2(subtotal * rate) : subtotal,
       discount: isForeign ? round2(discount * rate) : discount,
-      taxableAmount: inrTotal,
-      taxAmount: 0,
+      taxableAmount: isForeign ? round2(taxableAmount * rate) : taxableAmount,
+      taxAmount: isForeign ? round2(taxAmount * rate) : taxAmount,
       shipping: isForeign ? round2(shipping * rate) : shipping,
       roundOff: 0,
       total: inrTotal,
-      notes: form.notes || undefined,
-    };
+      notes: notesParts.join("\n\n") || undefined,
+    } satisfies Record<string, unknown> as unknown as SalesInvoiceInput;
   }
 
   function validatePayment(): string | null {
@@ -375,7 +589,7 @@ export function SaleForm({
     if (!pay.account) return "Select the bank or cash account that received the payment.";
     if (!pay.date) return "Payment date is required.";
     if (payMode === "part") {
-      const amt = round2(Number(pay.amount) || 0);
+      const amt = round2(toNum(pay.amount) || 0);
       if (!(amt > 0)) return "Part received amount must be above ₹0.";
       if (amt >= payableTotal) return "Part received amount must be below the grand total.";
     }
@@ -386,6 +600,11 @@ export function SaleForm({
     if (saving) return;
     if (isForeign && !(rate > 0)) {
       toast.error("Enter the exchange rate for a non-INR invoice.");
+      return;
+    }
+    const missingReason = findMissingManualReason();
+    if (missingReason) {
+      toast.error(missingReason);
       return;
     }
     const payError = validatePayment();
@@ -438,7 +657,12 @@ export function SaleForm({
         toast.error(`PDF not generated — ${errors[0]}`);
       } else {
         const ok = printInvoiceDoc(
-          buildInvoiceDocHtml({ invoice, customer, settings: store.settings, received: receivedNow }),
+          buildInvoiceDocHtml({
+            invoice,
+            customer,
+            settings: store.settings,
+            received: receivedNow,
+          }),
         );
         if (!ok) toast.error("Allow pop-ups to download the invoice PDF.");
       }
@@ -496,11 +720,18 @@ export function SaleForm({
                       onChange={(e) => setForm({ ...form, date: e.target.value })}
                     />
                   </FormField>
-                  <FormField label="Due date" required>
-                    <Input
-                      type="date"
-                      value={form.dueDate}
-                      onChange={(e) => setForm({ ...form, dueDate: e.target.value })}
+                  <FormField
+                    label="Payment due days"
+                    hint={
+                      computedDueDate
+                        ? `Due date: ${computedDueDate}`
+                        : "Leave blank / 0 for no due date."
+                    }
+                  >
+                    <NumInput
+                      decimals={0}
+                      value={form.dueDays}
+                      onChange={(n) => setForm({ ...form, dueDays: n })}
                     />
                   </FormField>
                   <FormField label="Invoice number" required>
@@ -581,41 +812,50 @@ export function SaleForm({
                     />
                   </FormField>
                   <FormField label="Order platform" hint="Select or type a new platform.">
-                    <Combo
+                    <MasterCombo
+                      masterId="platforms"
                       value={form.platform}
-                      options={platformOptions}
                       onChange={(v) => setForm({ ...form, platform: v })}
                     />
                   </FormField>
-                  <FormField label="Sale type" hint="UE, UI, Export, GST INR or a custom type.">
+                  <FormField label="Sale type" hint="UE, UI, Export or GST INR.">
                     <Combo
-                      value={
-                        SALE_TYPES.find((s) => s.id === form.saleType)?.label ??
-                        String(form.saleType)
-                      }
-                      options={SALE_TYPES.map((s) => s.label)}
+                      value={SALE_TYPE_LABEL[form.saleType] ?? String(form.saleType)}
+                      options={saleTypeOptions}
                       onChange={(v) => {
-                        const hit = SALE_TYPES.find(
-                          (s) => s.label.toLowerCase() === v.trim().toLowerCase(),
-                        );
-                        setForm({ ...form, saleType: (hit ? hit.id : v) as SaleType });
+                        const hit = SALE_TYPE_ID[v.trim().toUpperCase()];
+                        setForm({ ...form, saleType: hit ?? (v as SaleType) });
                       }}
                     />
                   </FormField>
                   <FormField label="Currency" hint="Select or type a currency code.">
-                    <Combo
+                    <MasterCombo
+                      masterId="currencies"
                       value={form.currency}
-                      options={CURRENCIES}
-                      onChange={(v) => setForm({ ...form, currency: v.toUpperCase() })}
+                      onChange={(v) => {
+                        const code = v.toUpperCase();
+                        const suggested = masterRate(code);
+                        setForm({
+                          ...form,
+                          currency: code,
+                          exchangeRate:
+                            code === "INR"
+                              ? 1
+                              : suggested
+                                ? toNum(suggested)
+                                : form.exchangeRate === 1
+                                  ? undefined
+                                  : form.exchangeRate,
+                        });
+                      }}
                     />
                   </FormField>
 
                   {isForeign ? (
                     <FormField label={`Exchange rate (1 ${form.currency} → ₹)`} required>
-                      <Input
-                        inputMode="decimal"
+                      <NumInput
                         value={form.exchangeRate}
-                        onChange={(e) => setForm({ ...form, exchangeRate: e.target.value })}
+                        onChange={(n) => setForm({ ...form, exchangeRate: n })}
                       />
                     </FormField>
                   ) : null}
@@ -626,53 +866,16 @@ export function SaleForm({
                   <div className="rounded-xl border border-border bg-muted/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-navy">Diamond items</p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            const row = emptyDiamond();
-                            setDiamondRows([...diamondRows, row]);
-                            setSelectedRow(row.id);
-                          }}
-                        >
-                          <Plus className="size-4" /> Add Item
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          title="Duplicate the selected row so you can edit the copy"
-                          onClick={() => {
-                            const idx = diamondRows.findIndex((x) => x.id === selectedRow);
-                            const at = idx >= 0 ? idx : diamondRows.length - 1;
-                            const src = diamondRows[at];
-                            if (!src) return;
-                            const copy = { ...src, id: uid("ln") };
-                            setDiamondRows([
-                              ...diamondRows.slice(0, at + 1),
-                              copy,
-                              ...diamondRows.slice(at + 1),
-                            ]);
-                            setSelectedRow(copy.id);
-                          }}
-                        >
-                          <Copy className="size-4" /> Copy This Item
-                        </Button>
-                      </div>
                     </div>
 
                     {/* permanent column titles (desktop) */}
-                    <div className="mt-3 hidden gap-2 px-2 sm:grid sm:[grid-template-columns:repeat(16,minmax(0,1fr))]">
+                    <div className="mt-3 hidden gap-2 px-2 sm:grid sm:[grid-template-columns:repeat(14,minmax(0,1fr))]">
                       <ColHead label="Sr. No." className="sm:col-span-1" />
                       <ColHead label="Description" className="sm:col-span-4" />
-                      <ColHead label="HSN Code" className="sm:col-span-2" />
-                      <ColHead label="PCS" className="sm:col-span-1" />
-                      <ColHead label="CT" className="sm:col-span-1" />
+                      <ColHead label="CT" className="sm:col-span-2" />
                       <ColHead label="Price/CT" className="sm:col-span-2" />
-                      <ColHead label="Total Amount" className="sm:col-span-2" />
-                      <ColHead label="Actions" className="sm:col-span-3" />
+                      <ColHead label="Total Amount" className="sm:col-span-3" />
+                      <ColHead label="Actions" className="sm:col-span-2" />
                     </div>
 
                     <div className="mt-2 space-y-2">
@@ -681,7 +884,7 @@ export function SaleForm({
                           key={r.id}
                           onFocus={() => setSelectedRow(r.id)}
                           className={cn(
-                            "grid grid-cols-1 gap-2 rounded-lg border bg-card p-2 sm:items-center sm:[grid-template-columns:repeat(16,minmax(0,1fr))]",
+                            "grid grid-cols-1 gap-2 rounded-lg border bg-card p-2 sm:items-center sm:[grid-template-columns:repeat(14,minmax(0,1fr))]",
                             selectedRow === r.id
                               ? "border-navy ring-1 ring-navy/30"
                               : "border-border",
@@ -695,10 +898,10 @@ export function SaleForm({
                           </div>
                           <div className="min-w-0 sm:col-span-4">
                             <CellLabel label="Description" />
-                            <Combo
+                            <MasterCombo
+                              masterId="productDescriptions"
                               className="h-9"
                               value={r.description}
-                              options={descriptionOptions}
                               placeholder="Select or type description"
                               onChange={(v) =>
                                 setDiamondRows(
@@ -709,84 +912,55 @@ export function SaleForm({
                               }
                             />
                           </div>
-                          <div className="min-w-0 sm:col-span-2">
-                            <CellLabel label="HSN Code" />
-                            <Combo
-                              className="h-9"
-                              value={r.hsnCode}
-                              options={[DEFAULT_HSN, "71023910", "71131900"]}
-                              placeholder="HSN"
-                              onChange={(v) =>
-                                setDiamondRows(
-                                  diamondRows.map((x, i) => (i === idx ? { ...x, hsnCode: v } : x)),
-                                )
-                              }
-                            />
-                          </div>
-                          <div className="sm:col-span-1">
-                            <CellLabel label="PCS" />
-                            <Input
-                              className="h-9"
-                              inputMode="numeric"
-                              value={String(r.pcs)}
-                              onChange={(e) =>
-                                setDiamondRows(
-                                  diamondRows.map((x, i) =>
-                                    i === idx ? { ...x, pcs: Number(e.target.value) || 0 } : x,
-                                  ),
-                                )
-                              }
-                            />
-                          </div>
-                          <div className="sm:col-span-1">
+                          <div className="sm:col-span-2">
                             <CellLabel label="CT" />
-                            <Input
+                            <NumInput
                               className="h-9"
-                              inputMode="decimal"
-                              value={String(r.carat)}
-                              onChange={(e) =>
+                              value={r.carat}
+                              onChange={(n) =>
                                 setDiamondRows(
-                                  diamondRows.map((x, i) =>
-                                    i === idx ? { ...x, carat: Number(e.target.value) || 0 } : x,
-                                  ),
+                                  diamondRows.map((x, i) => (i === idx ? { ...x, carat: n } : x)),
                                 )
                               }
                             />
                           </div>
                           <div className="sm:col-span-2">
                             <CellLabel label="Price/CT" />
-                            <Input
+                            <MoneyInput
                               className="h-9"
-                              inputMode="decimal"
-                              value={String(r.rate)}
-                              onChange={(e) =>
+                              value={r.rate}
+                              onChange={(n) =>
                                 setDiamondRows(
-                                  diamondRows.map((x, i) =>
-                                    i === idx ? { ...x, rate: Number(e.target.value) || 0 } : x,
-                                  ),
+                                  diamondRows.map((x, i) => (i === idx ? { ...x, rate: n } : x)),
                                 )
                               }
                             />
                           </div>
 
-                          <div className="sm:col-span-2">
+                          <div className="sm:col-span-3">
                             <CellLabel label="Total Amount (CT × Price/CT)" />
-                            <span className="num block text-sm font-semibold text-navy">
-                              {formatMoney(r.amount)}
-                            </span>
+                            <AutoManual
+                              auto={r.autoAmount}
+                              manual={r.manualAmount}
+                              reason={r.manualReason}
+                              onManual={(n) =>
+                                setDiamondRows(
+                                  diamondRows.map((x, i) =>
+                                    i === idx ? { ...x, manualAmount: n } : x,
+                                  ),
+                                )
+                              }
+                              onReason={(v) =>
+                                setDiamondRows(
+                                  diamondRows.map((x, i) =>
+                                    i === idx ? { ...x, manualReason: v } : x,
+                                  ),
+                                )
+                              }
+                            />
                           </div>
-                          <div className="flex flex-wrap gap-1 sm:col-span-3">
+                          <div className="flex flex-wrap gap-1 sm:col-span-2">
                             <CellLabel label="Actions" />
-                            <Button
-                              type="button"
-                              size="sm"
-                              variant="ghost"
-                              className="h-8 px-2 text-xs"
-                              title="Select this row for editing"
-                              onClick={() => setSelectedRow(r.id)}
-                            >
-                              Edit
-                            </Button>
                             <Button
                               type="button"
                               size="sm"
@@ -803,7 +977,7 @@ export function SaleForm({
                                 setSelectedRow(copy.id);
                               }}
                             >
-                              Copy
+                              <Copy className="size-4" />
                             </Button>
                             <Button
                               type="button"
@@ -822,6 +996,41 @@ export function SaleForm({
                         </div>
                       ))}
                     </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const row = emptyDiamond();
+                          setDiamondRows([...diamondRows, row]);
+                          setSelectedRow(row.id);
+                        }}
+                      >
+                        <Plus className="size-4" /> Add Item
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        title="Duplicate the selected row so you can edit the copy"
+                        onClick={() => {
+                          const idx = diamondRows.findIndex((x) => x.id === selectedRow);
+                          const at = idx >= 0 ? idx : diamondRows.length - 1;
+                          const src = diamondRows[at];
+                          if (!src) return;
+                          const copy = { ...src, id: uid("ln") };
+                          setDiamondRows([
+                            ...diamondRows.slice(0, at + 1),
+                            copy,
+                            ...diamondRows.slice(at + 1),
+                          ]);
+                          setSelectedRow(copy.id);
+                        }}
+                      >
+                        <Copy className="size-4" /> Copy This Item
+                      </Button>
+                    </div>
                     <p className="num mt-3 text-xs text-muted-foreground">
                       Total carat {diamondTotals.carat} · Subtotal{" "}
                       {formatMoney(diamondTotals.subtotal)}
@@ -831,93 +1040,112 @@ export function SaleForm({
                   <div className="rounded-xl border border-border bg-muted/40 p-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <p className="text-sm font-semibold text-navy">Jewelry items</p>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          onClick={() => {
-                            const item = emptyJewelry();
-                            setJewelry([...jewelry, item]);
-                            setExpanded(item.id);
-                            setSelectedItem(item.id);
-                          }}
-                        >
-                          <Plus className="size-4" /> Add Item
-                        </Button>
-                        <Button
-                          type="button"
-                          size="sm"
-                          variant="outline"
-                          title="Duplicate the selected item so you can edit the copy"
-                          onClick={() => {
-                            const target = selectedItem ?? expanded;
-                            const idx = computedJewelry.findIndex((x) => x.id === target);
-                            const at = idx >= 0 ? idx : computedJewelry.length - 1;
-                            const src = computedJewelry[at];
-                            if (!src) return;
-                            const copy: JewelryItem = {
-                              ...src,
-                              id: uid("jw"),
-                              stones: src.stones.map((s) => ({ ...s, id: uid("st") })),
-                            };
-                            setJewelry([
-                              ...jewelry.slice(0, at + 1),
-                              copy,
-                              ...jewelry.slice(at + 1),
-                            ]);
-                            setExpanded(copy.id);
-                            setSelectedItem(copy.id);
-                          }}
-                        >
-                          <Copy className="size-4" /> Copy This Item
-                        </Button>
-                      </div>
                     </div>
-                    <div className="mt-3 space-y-2">
-                      {computedJewelry.map((it, idx) => {
-                        const isOpen = expanded === it.id;
-                        return (
-                          <div
-                            key={it.id}
-                            onFocus={() => setSelectedItem(it.id)}
-                            className={cn(
-                              "rounded-lg border bg-card",
-                              (selectedItem ?? expanded) === it.id
-                                ? "border-navy ring-1 ring-navy/30"
-                                : "border-border",
-                            )}
-                          >
-                            <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2">
-                              <button
-                                type="button"
-                                className="flex min-w-0 items-center gap-2 text-left"
-                                onClick={() => {
-                                  setExpanded(isOpen ? null : it.id);
-                                  setSelectedItem(it.id);
-                                }}
-                              >
-                                {isOpen ? (
-                                  <ChevronDown className="size-4 shrink-0 text-navy" />
-                                ) : (
-                                  <ChevronRight className="size-4 shrink-0 text-navy" />
-                                )}
-                                <span className="min-w-0">
+                    <div className="mt-3 overflow-x-auto">
+                      <div className="min-w-[880px] space-y-2 sm:min-w-0">
+                        {/* desktop column titles */}
+                        <div className="hidden gap-2 px-2 sm:grid sm:grid-cols-12">
+                          <ColHead label="Description" className="sm:col-span-3" />
+                          <ColHead label="Category" className="sm:col-span-1" />
+                          <ColHead label="Metal" className="sm:col-span-1" />
+                          <ColHead label="Colour" className="sm:col-span-1" />
+                          <ColHead label="Weights" className="sm:col-span-3" />
+                          <ColHead label="Total Value" className="sm:col-span-2" />
+                          <ColHead label="Actions" className="sm:col-span-1" />
+                        </div>
+
+                        {computedJewelry.map((it, idx) => {
+                          const isOpen = expanded === it.id;
+                          const m = getItemManual(it.id);
+                          return (
+                            <div
+                              key={it.id}
+                              onFocus={() => setSelectedItem(it.id)}
+                              className={cn(
+                                "rounded-lg border bg-card",
+                                (selectedItem ?? expanded) === it.id
+                                  ? "border-navy ring-1 ring-navy/30"
+                                  : "border-border",
+                              )}
+                            >
+                              {/* desktop compact row */}
+                              <div className="hidden items-center gap-2 p-2 sm:grid sm:grid-cols-12">
+                                <div className="min-w-0 sm:col-span-3">
                                   <span className="block truncate text-sm font-medium text-navy">
                                     {idx + 1}. {it.description || `Item ${idx + 1}`}
                                   </span>
-                                  <span className="num block truncate text-[11px] text-muted-foreground">
-                                    {it.karat} · {it.netWeight}g · {formatMoney(it.total)}
+                                </div>
+                                <div className="min-w-0 truncate text-xs sm:col-span-1">
+                                  {it.category || "—"}
+                                </div>
+                                <div className="min-w-0 truncate text-xs sm:col-span-1">
+                                  {it.metal || it.karat}
+                                </div>
+                                <div className="min-w-0 truncate text-xs sm:col-span-1">
+                                  {it.metalColour}
+                                </div>
+                                <div className="num truncate text-xs text-muted-foreground sm:col-span-3">
+                                  G {it.grossWeight ?? 0} · S {it.stoneWeight ?? 0} · N{" "}
+                                  {it.netWeight} · 24K {it.fineWeight24k ?? 0}
+                                </div>
+                                <div className="num truncate text-sm font-semibold text-navy sm:col-span-2">
+                                  {formatMoney(it.total)}
+                                  {m.total !== undefined ? <ManualBadge /> : null}
+                                </div>
+                                <div className="flex shrink-0 flex-wrap gap-1 sm:col-span-1">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 px-2 text-xs"
+                                    title="Open this item for editing"
+                                    onClick={() => {
+                                      setExpanded(isOpen ? null : it.id);
+                                      setSelectedItem(it.id);
+                                    }}
+                                  >
+                                    {isOpen ? (
+                                      <ChevronDown className="size-4" />
+                                    ) : (
+                                      <ChevronRight className="size-4" />
+                                    )}
+                                  </Button>
+                                </div>
+                              </div>
+
+                              {/* mobile collapsible card header */}
+                              <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 p-2 sm:hidden">
+                                <button
+                                  type="button"
+                                  className="flex min-w-0 items-center gap-2 text-left"
+                                  onClick={() => {
+                                    setExpanded(isOpen ? null : it.id);
+                                    setSelectedItem(it.id);
+                                  }}
+                                >
+                                  {isOpen ? (
+                                    <ChevronDown className="size-4 shrink-0 text-navy" />
+                                  ) : (
+                                    <ChevronRight className="size-4 shrink-0 text-navy" />
+                                  )}
+                                  <span className="min-w-0">
+                                    <span className="block truncate text-sm font-medium text-navy">
+                                      {idx + 1}. {it.description || `Item ${idx + 1}`}
+                                    </span>
+                                    <span className="num block truncate text-[11px] text-muted-foreground">
+                                      {it.metal || it.karat} · {it.netWeight}g ·{" "}
+                                      {formatMoney(it.total)}
+                                    </span>
                                   </span>
-                                </span>
-                              </button>
-                              <div className="flex shrink-0 flex-wrap gap-1">
+                                </button>
+                              </div>
+
+                              <div className="flex flex-wrap gap-1 px-2 pb-2 sm:hidden">
                                 <Button
                                   type="button"
                                   size="sm"
                                   variant="ghost"
                                   className="h-8 px-2 text-xs"
-                                  title="Open this item for editing"
                                   onClick={() => {
                                     setExpanded(it.id);
                                     setSelectedItem(it.id);
@@ -930,7 +1158,6 @@ export function SaleForm({
                                   size="sm"
                                   variant="ghost"
                                   className="h-8 px-2 text-xs"
-                                  title="Duplicate this item"
                                   onClick={() => {
                                     const copy: JewelryItem = {
                                       ...it,
@@ -953,298 +1180,365 @@ export function SaleForm({
                                   size="sm"
                                   variant="ghost"
                                   className="h-8 px-2 text-xs text-neg"
-                                  title="Delete this item"
                                   disabled={jewelry.length === 1}
                                   onClick={() => setJewelry(jewelry.filter((_, i) => i !== idx))}
                                 >
                                   Delete
                                 </Button>
                               </div>
-                            </div>
 
-                            {isOpen ? (
-                              <div className="space-y-3 border-t border-border p-3">
-                                <div>
-                                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-sl-total">
-                                    A · Product and metal
-                                  </p>
-                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                              {/* desktop-only row actions (copy / delete) shown when open */}
+                              {isOpen ? (
+                                <div className="hidden flex-wrap gap-1 px-2 pb-2 sm:flex">
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 px-2 text-xs"
+                                    onClick={() => {
+                                      const copy: JewelryItem = {
+                                        ...it,
+                                        id: uid("jw"),
+                                        stones: it.stones.map((s) => ({ ...s, id: uid("st") })),
+                                      };
+                                      setJewelry([
+                                        ...jewelry.slice(0, idx + 1),
+                                        copy,
+                                        ...jewelry.slice(idx + 1),
+                                      ]);
+                                      setExpanded(copy.id);
+                                      setSelectedItem(copy.id);
+                                    }}
+                                  >
+                                    <Copy className="size-4" /> Copy
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    size="sm"
+                                    variant="ghost"
+                                    className="h-8 px-2 text-xs text-neg"
+                                    disabled={jewelry.length === 1}
+                                    onClick={() => setJewelry(jewelry.filter((_, i) => i !== idx))}
+                                  >
+                                    Delete
+                                  </Button>
+                                </div>
+                              ) : null}
+
+                              {isOpen ? (
+                                <div className="space-y-3 border-t border-border p-3">
+                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                                     <FormField label="Sr. No.">
-                                      <Input
-                                        readOnly
-                                        value={String(idx + 1)}
-                                        className="bg-muted"
-                                      />
+                                      <Input readOnly value={String(idx + 1)} className="bg-muted" />
                                     </FormField>
                                     <FormField label="Description">
-                                      <Combo
+                                      <MasterCombo
+                                        masterId="productDescriptions"
                                         value={it.description}
-                                        options={descriptionOptions}
                                         onChange={(v) => setJw(it.id, { description: v })}
                                       />
                                     </FormField>
-                                    <FormField label="Metal KT" hint="Select or type a new karat.">
-                                      <Combo
-                                        value={it.karat}
-                                        options={karatOptions}
-                                        onChange={(v) => setJw(it.id, { karat: v })}
+                                    <FormField label="Jewellery Category">
+                                      <MasterCombo
+                                        masterId="jewelleryCategories"
+                                        value={it.category ?? ""}
+                                        onChange={(v) => setJw(it.id, { category: v })}
                                       />
                                     </FormField>
-                                    <FormField
-                                      label="Metal Colour"
-                                      hint="Select or type a new colour."
-                                    >
-                                      <Combo
+                                    <FormField label="Metal">
+                                      <MasterCombo
+                                        masterId="metals"
+                                        value={it.metal ?? it.karat}
+                                        onChange={(v) => setJw(it.id, { metal: v, karat: v })}
+                                      />
+                                    </FormField>
+                                    <FormField label="Metal Colour">
+                                      <MasterCombo
+                                        masterId="metalColours"
                                         value={it.metalColour}
-                                        options={colourOptions}
                                         onChange={(v) => setJw(it.id, { metalColour: v })}
                                       />
                                     </FormField>
-                                    <FormField label="Metal Weight / Gram">
-                                      <Input
-                                        inputMode="decimal"
-                                        value={String(it.netWeight)}
-                                        onChange={(e) =>
-                                          setJw(it.id, { netWeight: Number(e.target.value) || 0 })
-                                        }
+                                    <FormField label="Gross Weight (g)">
+                                      <NumInput
+                                        value={it.grossWeight}
+                                        onChange={(n) => setJw(it.id, { grossWeight: n })}
                                       />
                                     </FormField>
-                                    <FormField label="Fine 999 %">
-                                      <Input
-                                        inputMode="decimal"
-                                        value={String(it.finePercent)}
-                                        onChange={(e) =>
-                                          setJw(it.id, { finePercent: Number(e.target.value) || 0 })
-                                        }
+                                    <FormField label="Stone Weight (g)">
+                                      <NumInput
+                                        value={it.stoneWeight}
+                                        onChange={(n) => setJw(it.id, { stoneWeight: n })}
                                       />
                                     </FormField>
-                                    <FormField
-                                      label="Fine 999 Gram"
-                                      hint="Weight × Fine % — calculated."
-                                    >
-                                      <Input
-                                        readOnly
-                                        value={String(it.fineGram)}
-                                        className="bg-muted"
+                                    <FormField label="Net Weight (g)">
+                                      <NumInput
+                                        value={it.netWeight}
+                                        onChange={(n) => setJw(it.id, { netWeight: n })}
+                                      />
+                                    </FormField>
+                                    <FormField label="24KT Fine Weight (g)">
+                                      <NumInput
+                                        value={it.fineWeight24k}
+                                        onChange={(n) => setJw(it.id, { fineWeight24k: n })}
                                       />
                                     </FormField>
                                     <FormField label="Metal Price / Gram">
-                                      <Input
-                                        inputMode="decimal"
-                                        value={String(it.metalRate)}
-                                        onChange={(e) =>
-                                          setJw(it.id, { metalRate: Number(e.target.value) || 0 })
-                                        }
+                                      <MoneyInput
+                                        value={it.metalRatePerGram}
+                                        onChange={(n) => setJw(it.id, { metalRatePerGram: n })}
                                       />
                                     </FormField>
                                     <FormField
                                       label="Total Metal Value"
-                                      hint="Fine gram × price — calculated."
+                                      hint="24KT fine weight × price — calculated."
                                     >
-                                      <Input
-                                        readOnly
-                                        value={formatMoney(it.metalValue)}
-                                        className="bg-muted"
+                                      <AutoManual
+                                        auto={it.metalValue}
+                                        manual={m.metal}
+                                        reason={m.metalReason}
+                                        onManual={(n) => setItemManual(it.id, { metal: n })}
+                                        onReason={(v) => setItemManual(it.id, { metalReason: v })}
                                       />
                                     </FormField>
-                                  </div>
-                                </div>
-
-                                <div>
-                                  <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-sl-part">
-                                    B · Making charges
-                                  </p>
-                                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                                     <FormField label="Making Charge / Gram">
-                                      <Input
-                                        inputMode="decimal"
-                                        value={String(it.makingRate)}
-                                        onChange={(e) =>
-                                          setJw(it.id, { makingRate: Number(e.target.value) || 0 })
-                                        }
+                                      <MoneyInput
+                                        value={it.makingRatePerGram}
+                                        onChange={(n) => setJw(it.id, { makingRatePerGram: n })}
                                       />
                                     </FormField>
                                     <FormField
                                       label="Total Making Charges"
-                                      hint="Weight × making rate — calculated."
+                                      hint="Net weight × making rate — calculated."
                                     >
-                                      <Input
-                                        readOnly
-                                        value={formatMoney(it.makingValue)}
-                                        className="bg-muted"
+                                      <AutoManual
+                                        auto={it.makingValue}
+                                        manual={m.making}
+                                        reason={m.makingReason}
+                                        onManual={(n) => setItemManual(it.id, { making: n })}
+                                        onReason={(v) => setItemManual(it.id, { makingReason: v })}
                                       />
                                     </FormField>
                                   </div>
-                                </div>
 
-                                <div>
-                                  <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-                                    <p className="text-xs font-semibold uppercase tracking-wide text-sl-advance">
-                                      C · Diamond / stone
-                                    </p>
-                                    <div className="flex flex-wrap gap-2">
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        onClick={() =>
-                                          setJw(it.id, { stones: [...it.stones, emptyStone()] })
-                                        }
-                                      >
-                                        <Plus className="size-4" /> Add Stone
-                                      </Button>
-                                      <Button
-                                        type="button"
-                                        size="sm"
-                                        variant="outline"
-                                        title="Duplicate the last stone line"
-                                        onClick={() => {
-                                          const last = it.stones[it.stones.length - 1];
-                                          if (!last) return;
-                                          setJw(it.id, {
-                                            stones: [...it.stones, { ...last, id: uid("st") }],
-                                          });
-                                        }}
-                                      >
-                                        <Copy className="size-4" /> Copy Stone
-                                      </Button>
+                                  <div>
+                                    <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                                      <p className="text-xs font-semibold uppercase tracking-wide text-sl-advance">
+                                        Stone lines
+                                      </p>
+                                      <div className="flex flex-wrap gap-2">
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          onClick={() =>
+                                            setJw(it.id, { stones: [...it.stones, emptyStone()] })
+                                          }
+                                        >
+                                          <Plus className="size-4" /> Add Stone
+                                        </Button>
+                                        <Button
+                                          type="button"
+                                          size="sm"
+                                          variant="outline"
+                                          title="Duplicate the last stone line"
+                                          onClick={() => {
+                                            const last = it.stones[it.stones.length - 1];
+                                            if (!last) return;
+                                            setJw(it.id, {
+                                              stones: [...it.stones, { ...last, id: uid("st") }],
+                                            });
+                                          }}
+                                        >
+                                          <Copy className="size-4" /> Copy Stone
+                                        </Button>
+                                      </div>
+                                    </div>
+                                    <div className="hidden gap-2 px-2 sm:grid sm:grid-cols-12">
+                                      <ColHead label="Stone Type" className="sm:col-span-3" />
+                                      <ColHead label="Size / MM" className="sm:col-span-2" />
+                                      <ColHead label="Carat" className="sm:col-span-2" />
+                                      <ColHead label="Price / CT" className="sm:col-span-2" />
+                                      <ColHead label="Stone Value" className="sm:col-span-3" />
+                                    </div>
+                                    <div className="mt-1 space-y-2">
+                                      {it.stones.map((s, si) => (
+                                        <div
+                                          key={s.id}
+                                          className="grid grid-cols-1 gap-2 rounded-lg border border-border p-2 sm:grid-cols-12 sm:items-center"
+                                        >
+                                          <div className="min-w-0 sm:col-span-3">
+                                            <CellLabel label="Stone Type" />
+                                            <MasterCombo
+                                              masterId="stoneTypes"
+                                              className="h-9"
+                                              value={s.stoneType}
+                                              onChange={(v) =>
+                                                setJw(it.id, {
+                                                  stones: it.stones.map((x, i) =>
+                                                    i === si ? { ...x, stoneType: v } : x,
+                                                  ),
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div className="min-w-0 sm:col-span-2">
+                                            <CellLabel label="Size / MM" />
+                                            <Combo
+                                              className="h-9"
+                                              value={s.size}
+                                              options={sizeOptions}
+                                              placeholder="Optional"
+                                              onChange={(v) =>
+                                                setJw(it.id, {
+                                                  stones: it.stones.map((x, i) =>
+                                                    i === si ? { ...x, size: v } : x,
+                                                  ),
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div className="sm:col-span-2">
+                                            <CellLabel label="Carat" />
+                                            <NumInput
+                                              className="h-9"
+                                              value={s.carat}
+                                              onChange={(n) =>
+                                                setJw(it.id, {
+                                                  stones: it.stones.map((x, i) =>
+                                                    i === si ? { ...x, carat: n } : x,
+                                                  ),
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div className="sm:col-span-2">
+                                            <CellLabel label="Price / CT" />
+                                            <MoneyInput
+                                              className="h-9"
+                                              value={s.rate}
+                                              onChange={(n) =>
+                                                setJw(it.id, {
+                                                  stones: it.stones.map((x, i) =>
+                                                    i === si ? { ...x, rate: n } : x,
+                                                  ),
+                                                })
+                                              }
+                                            />
+                                          </div>
+                                          <div className="flex items-center justify-between gap-1 sm:col-span-3">
+                                            <div className="min-w-0 flex-1">
+                                              <CellLabel label="Total Stone Amount" />
+                                              <MoneyInput
+                                                className="h-9"
+                                                value={s.totalAmount ?? s.value}
+                                                onChange={(n) =>
+                                                  setJw(it.id, {
+                                                    stones: it.stones.map((x, i) =>
+                                                      i === si ? { ...x, totalAmount: n } : x,
+                                                    ),
+                                                  })
+                                                }
+                                              />
+                                            </div>
+                                            <div className="flex flex-wrap gap-1">
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="ghost"
+                                                className="h-8 px-2 text-xs"
+                                                title="Duplicate this stone line"
+                                                onClick={() =>
+                                                  setJw(it.id, {
+                                                    stones: [
+                                                      ...it.stones.slice(0, si + 1),
+                                                      { ...s, id: uid("st") },
+                                                      ...it.stones.slice(si + 1),
+                                                    ],
+                                                  })
+                                                }
+                                              >
+                                                <Copy className="size-4" />
+                                              </Button>
+                                              <Button
+                                                type="button"
+                                                size="sm"
+                                                variant="ghost"
+                                                className="h-8 px-2 text-xs text-neg"
+                                                title="Delete this stone line"
+                                                disabled={it.stones.length === 1}
+                                                onClick={() =>
+                                                  setJw(it.id, {
+                                                    stones: it.stones.filter((_, i) => i !== si),
+                                                  })
+                                                }
+                                              >
+                                                Delete
+                                              </Button>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      ))}
                                     </div>
                                   </div>
-                                  <div className="hidden gap-2 px-2 sm:grid sm:grid-cols-12">
-                                    <ColHead label="Stone Type" className="sm:col-span-3" />
-                                    <ColHead label="Size / MM" className="sm:col-span-2" />
-                                    <ColHead label="Carat" className="sm:col-span-2" />
-                                    <ColHead label="Price / CT" className="sm:col-span-2" />
-                                    <ColHead label="Stone Value" className="sm:col-span-3" />
-                                  </div>
-                                  <div className="mt-1 space-y-2">
-                                    {it.stones.map((s, si) => (
-                                      <div
-                                        key={s.id}
-                                        className="grid grid-cols-1 gap-2 rounded-lg border border-border p-2 sm:grid-cols-12 sm:items-center"
-                                      >
-                                        <div className="min-w-0 sm:col-span-3">
-                                          <CellLabel label="Stone Type" />
-                                          <Combo
-                                            className="h-9"
-                                            value={s.stoneType}
-                                            options={stoneOptions}
-                                            onChange={(v) =>
-                                              setJw(it.id, {
-                                                stones: it.stones.map((x, i) =>
-                                                  i === si ? { ...x, stoneType: v } : x,
-                                                ),
-                                              })
-                                            }
-                                          />
-                                        </div>
-                                        <div className="min-w-0 sm:col-span-2">
-                                          <CellLabel label="Size / MM" />
-                                          <Combo
-                                            className="h-9"
-                                            value={s.size}
-                                            options={sizeOptions}
-                                            placeholder="Select or type size"
-                                            onChange={(v) =>
-                                              setJw(it.id, {
-                                                stones: it.stones.map((x, i) =>
-                                                  i === si ? { ...x, size: v } : x,
-                                                ),
-                                              })
-                                            }
-                                          />
-                                        </div>
-                                        <div className="sm:col-span-2">
-                                          <CellLabel label="Carat" />
-                                          <Input
-                                            className="h-9"
-                                            inputMode="decimal"
-                                            value={String(s.carat)}
-                                            onChange={(e) =>
-                                              setJw(it.id, {
-                                                stones: it.stones.map((x, i) =>
-                                                  i === si
-                                                    ? { ...x, carat: Number(e.target.value) || 0 }
-                                                    : x,
-                                                ),
-                                              })
-                                            }
-                                          />
-                                        </div>
-                                        <div className="sm:col-span-2">
-                                          <CellLabel label="Price / CT" />
-                                          <Input
-                                            className="h-9"
-                                            inputMode="decimal"
-                                            value={String(s.rate)}
-                                            onChange={(e) =>
-                                              setJw(it.id, {
-                                                stones: it.stones.map((x, i) =>
-                                                  i === si
-                                                    ? { ...x, rate: Number(e.target.value) || 0 }
-                                                    : x,
-                                                ),
-                                              })
-                                            }
-                                          />
-                                        </div>
-                                        <div className="flex items-center justify-between gap-1 sm:col-span-3">
-                                          <div className="min-w-0">
-                                            <CellLabel label="Stone Value (Carat × Price/CT)" />
-                                            <span className="num text-sm font-medium">
-                                              {formatMoney(s.value)}
-                                            </span>
-                                          </div>
-                                          <div className="flex flex-wrap gap-1">
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              variant="ghost"
-                                              className="h-8 px-2 text-xs"
-                                              title="Duplicate this stone line"
-                                              onClick={() =>
-                                                setJw(it.id, {
-                                                  stones: [
-                                                    ...it.stones.slice(0, si + 1),
-                                                    { ...s, id: uid("st") },
-                                                    ...it.stones.slice(si + 1),
-                                                  ],
-                                                })
-                                              }
-                                            >
-                                              Copy
-                                            </Button>
-                                            <Button
-                                              type="button"
-                                              size="sm"
-                                              variant="ghost"
-                                              className="h-8 px-2 text-xs text-neg"
-                                              title="Delete this stone line"
-                                              disabled={it.stones.length === 1}
-                                              onClick={() =>
-                                                setJw(it.id, {
-                                                  stones: it.stones.filter((_, i) => i !== si),
-                                                })
-                                              }
-                                            >
-                                              Delete
-                                            </Button>
-                                          </div>
-                                        </div>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
 
-                                <div className="num flex items-center justify-between rounded-lg bg-sl-total-bg px-3 py-2 text-sm font-semibold text-sl-total">
-                                  <span>Jewelry item value</span>
-                                  <span>{formatMoney(it.total)}</span>
+                                  <div>
+                                    <p className="mb-1 text-xs font-medium text-muted-foreground">
+                                      Total Jewelry Value
+                                    </p>
+                                    <AutoManual
+                                      auto={round2(it.metalValue + it.makingValue + it.stoneValue)}
+                                      manual={m.total}
+                                      reason={m.totalReason}
+                                      onManual={(n) => setItemManual(it.id, { total: n })}
+                                      onReason={(v) => setItemManual(it.id, { totalReason: v })}
+                                      className="max-w-sm"
+                                    />
+                                  </div>
                                 </div>
-                              </div>
-                            ) : null}
-                          </div>
-                        );
-                      })}
+                              ) : null}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => {
+                          const item = emptyJewelry();
+                          setJewelry([...jewelry, item]);
+                          setExpanded(item.id);
+                          setSelectedItem(item.id);
+                        }}
+                      >
+                        <Plus className="size-4" /> Add Item
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        title="Duplicate the selected item so you can edit the copy"
+                        onClick={() => {
+                          const target = selectedItem ?? expanded;
+                          const idx = computedJewelry.findIndex((x) => x.id === target);
+                          const at = idx >= 0 ? idx : computedJewelry.length - 1;
+                          const src = computedJewelry[at];
+                          if (!src) return;
+                          const copy: JewelryItem = {
+                            ...src,
+                            id: uid("jw"),
+                            stones: src.stones.map((s) => ({ ...s, id: uid("st") })),
+                          };
+                          setJewelry([...jewelry.slice(0, at + 1), copy, ...jewelry.slice(at + 1)]);
+                          setExpanded(copy.id);
+                          setSelectedItem(copy.id);
+                        }}
+                      >
+                        <Copy className="size-4" /> Copy This Item
+                      </Button>
                     </div>
                     <div className="num mt-3 grid grid-cols-2 gap-1 text-xs text-muted-foreground sm:grid-cols-3">
                       <span>Total metal weight: {jewelryTotals.weight} g</span>
@@ -1257,43 +1551,122 @@ export function SaleForm({
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <FormField label={`Discount (${form.currency})`}>
-                    <Input
-                      inputMode="decimal"
-                      value={form.discount}
-                      onChange={(e) => setForm({ ...form, discount: e.target.value })}
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                  <FormField label="Discount mode">
+                    <Select
+                      value={form.discountMode}
+                      onValueChange={(v) => setForm({ ...form, discountMode: v as DiscountMode })}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="fixed">Fixed amount</SelectItem>
+                        <SelectItem value="percent">Percentage</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </FormField>
+                  <FormField
+                    label={
+                      form.discountMode === "percent"
+                        ? "Discount %"
+                        : `Discount (${form.currency})`
+                    }
+                  >
+                    <NumInput
+                      value={form.discountValue}
+                      onChange={(n) => setForm({ ...form, discountValue: n })}
                     />
                   </FormField>
                   <FormField label={`Shipping / other (${form.currency})`}>
-                    <Input
-                      inputMode="decimal"
+                    <MoneyInput
                       value={form.shipping}
-                      onChange={(e) => setForm({ ...form, shipping: e.target.value })}
+                      onChange={(n) => setForm({ ...form, shipping: n })}
                     />
                   </FormField>
+                  {isGst ? (
+                    <FormField label="Supply location">
+                      <Select
+                        value={form.supplyLocation}
+                        onValueChange={(v) =>
+                          setForm({ ...form, supplyLocation: v as SupplyLocation })
+                        }
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="inside">Inside Gujarat</SelectItem>
+                          <SelectItem value="outside">Outside Gujarat</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                  ) : null}
+                  {isGst ? (
+                    <FormField label="Tax slab %">
+                      <Select
+                        value={form.taxSlab}
+                        onValueChange={(v) => setForm({ ...form, taxSlab: v })}
+                      >
+                        <SelectTrigger>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {masterOptions(store.masters, "taxSlabs").map((t) => (
+                            <SelectItem key={t} value={t}>
+                              {t}%
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </FormField>
+                  ) : null}
                 </div>
 
-                <div className="num space-y-1 rounded-xl border border-border bg-sl-total-bg p-3 text-sm text-sl-total">
-                  <Row
-                    label="Subtotal"
-                    value={`${isForeign ? form.currency + " " : ""}${subtotal.toFixed(2)}`}
-                  />
-                  <Row
-                    label="Discount"
-                    value={`${isForeign ? form.currency + " " : ""}${discount.toFixed(2)}`}
-                  />
-                  <Row
-                    label="Shipping / other"
-                    value={`${isForeign ? form.currency + " " : ""}${shipping.toFixed(2)}`}
-                  />
-                  <div className="mt-1 flex items-center justify-between border-t border-sl-total/20 pt-2 text-base font-semibold">
+                <div className="space-y-2 rounded-xl border border-border bg-sl-total-bg p-3 text-sm text-sl-total">
+                  <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
+                    <span>Subtotal</span>
+                    <AutoManual
+                      auto={autoSubtotal}
+                      manual={manualSubtotal}
+                      reason={manualSubtotalReason}
+                      onManual={setManualSubtotal}
+                      onReason={setManualSubtotalReason}
+                      className="sm:w-56"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
+                    <span>Discount</span>
+                    <AutoManual
+                      auto={autoDiscount}
+                      manual={manualDiscount}
+                      reason={manualDiscountReason}
+                      onManual={setManualDiscount}
+                      onReason={setManualDiscountReason}
+                      className="sm:w-56"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
+                    <span>Shipping / other</span>
+                    <AutoManual
+                      auto={autoShipping}
+                      manual={manualShipping}
+                      reason={manualShippingReason}
+                      onManual={setManualShipping}
+                      onReason={setManualShippingReason}
+                      className="sm:w-56"
+                    />
+                  </div>
+                  <div className="mt-1 grid grid-cols-1 items-center gap-2 border-t border-sl-total/20 pt-2 text-base font-semibold sm:grid-cols-[1fr_auto]">
                     <span>Grand total{isForeign ? ` (${form.currency})` : ""}</span>
-                    <span>
-                      {isForeign
-                        ? `${form.currency} ${grandTotal.toFixed(2)}`
-                        : formatMoney(grandTotal)}
-                    </span>
+                    <AutoManual
+                      auto={autoGrandTotal}
+                      manual={manualGrandTotal}
+                      reason={manualGrandTotalReason}
+                      onManual={setManualGrandTotal}
+                      onReason={setManualGrandTotalReason}
+                      className="sm:w-56"
+                    />
                   </div>
                   {isForeign ? (
                     <div className="flex items-center justify-between pt-1 text-sm font-semibold">
@@ -1338,12 +1711,20 @@ export function SaleForm({
                   ) : payMode !== "pending" ? (
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <FormField label="Amount received" required>
-                        <Input
-                          inputMode="decimal"
-                          disabled={payMode === "full"}
-                          value={payMode === "full" ? payableTotal.toFixed(2) : pay.amount}
-                          onChange={(e) => setPay({ ...pay, amount: e.target.value })}
-                        />
+                        {payMode === "full" ? (
+                          <AutoManual
+                            auto={payableTotal}
+                            manual={manualReceived}
+                            reason={manualReceivedReason}
+                            onManual={setManualReceived}
+                            onReason={setManualReceivedReason}
+                          />
+                        ) : (
+                          <MoneyInput
+                            value={pay.amount}
+                            onChange={(n) => setPay({ ...pay, amount: n })}
+                          />
+                        )}
                       </FormField>
                       <FormField label="Payment date" required>
                         <Input
@@ -1381,9 +1762,10 @@ export function SaleForm({
                       </FormField>
                     </div>
                   ) : null}
-                  <p className="num mt-2 text-xs text-muted-foreground">
+                  <p className="num mt-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                     Pending after saving:{" "}
                     {formatMoney(round2(Math.max(0, payableTotal - receivedNow)))}
+                    {manualReceived !== undefined ? <ManualBadge /> : null}
                   </p>
                 </div>
 

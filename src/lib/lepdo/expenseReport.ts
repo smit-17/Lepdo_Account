@@ -20,7 +20,15 @@ export interface ExpenseReportMeta {
   grandTotal: number;
 }
 
-const HEADERS = ["Date", "Category", "Particulars", "Payment From", "Reference", "Amount", "Status"];
+const HEADERS = [
+  "Date",
+  "Category",
+  "Particulars",
+  "Payment From",
+  "Reference",
+  "Amount",
+  "Status",
+];
 
 const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
 const html = (v: string) => v.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");

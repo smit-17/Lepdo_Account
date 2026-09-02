@@ -1,3 +1,4 @@
+import { isPosted } from "@/lib/lepdo/entry";
 import { useMemo, useState } from "react";
 import {
   ArrowDownRight,
@@ -70,10 +71,14 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
     accounts.forEach((a) => running.set(a.id, a.openingBalance));
     const sorted = [...store.transactions]
       .filter((t) => t.sourceType === sourceType)
-      .sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date)));
+      .sort((a, b) =>
+        a.date === b.date ? a.code.localeCompare(b.code) : a.date.localeCompare(b.date),
+      );
     return sorted.map((t) => {
       const prev = running.get(t.accountId) ?? 0;
-      const next = t.voided ? prev : round2(prev + (t.direction === "in" ? t.amount : -t.amount));
+      const next = isPosted(t)
+        ? round2(prev + (t.direction === "in" ? t.amount : -t.amount))
+        : prev;
       running.set(t.accountId, next);
       return { ...t, balance: next };
     });
@@ -118,7 +123,7 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
   ]);
 
   const periodRows = rowsWithBalance.filter(
-    (t) => !t.voided && t.date >= shell.from && t.date <= shell.to,
+    (t) => isPosted(t) && t.date >= shell.from && t.date <= shell.to,
   );
   const moneyIn = round2(
     periodRows.filter((t) => t.direction === "in").reduce((s, t) => s + t.amount, 0),
@@ -129,7 +134,7 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
   const totalBalance = round2(
     accounts.filter((a) => a.active).reduce((s, a) => s + store.balanceOf(sourceType, a.id), 0),
   );
-  const unclassified = rowsWithBalance.filter((t) => !t.voided && !t.category).length;
+  const unclassified = rowsWithBalance.filter((t) => isPosted(t) && !t.category).length;
 
   function clearFilters() {
     setAccountFilter("all");
@@ -200,11 +205,7 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
                     {!acc.active ? " • Inactive" : ""}
                   </p>
                 </div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAccountFilter(acc.id)}
-                >
+                <Button variant="outline" size="sm" onClick={() => setAccountFilter(acc.id)}>
                   View Ledger
                 </Button>
               </div>
@@ -229,7 +230,8 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
               { value: "all", label: "All" },
               ...accounts.map((a) => ({
                 value: a.id,
-                label: "bankName" in a ? `${a.bankName} ••${a.last4}` : (a as { name: string }).name,
+                label:
+                  "bankName" in a ? `${a.bankName} ••${a.last4}` : (a as { name: string }).name,
               })),
             ]}
           />
@@ -335,7 +337,9 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
               {filtered.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={11} className="py-14 text-center">
-                    <p className="font-medium text-foreground">No transactions match your filters</p>
+                    <p className="font-medium text-foreground">
+                      No transactions match your filters
+                    </p>
                     <p className="mt-1 text-sm text-muted-foreground">
                       Adjust the date range or filters, or add a new entry.
                     </p>
@@ -427,7 +431,10 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
             <dl className="grid grid-cols-2 gap-3 text-sm">
               <Detail label="Date" value={formatDate(viewing.date)} />
               <Detail label="Amount" value={formatMoney(viewing.amount)} />
-              <Detail label="Direction" value={viewing.direction === "in" ? "Money In" : "Money Out"} />
+              <Detail
+                label="Direction"
+                value={viewing.direction === "in" ? "Money In" : "Money Out"}
+              />
               <Detail label="Party" value={partyName(store.parties, viewing.partyId)} />
               <Detail label="Reference" value={viewing.reference ?? "—"} />
               <Detail label="Payment method" value={viewing.paymentMethod ?? "—"} />

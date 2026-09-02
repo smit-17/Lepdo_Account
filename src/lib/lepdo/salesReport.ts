@@ -77,7 +77,10 @@ export type SalesReportKind =
   | { kind: "outstanding"; customers: CustomerView[] }
   | { kind: "ledger"; customer: CustomerView; rows: LedgerRow[] };
 
-export function buildSalesReportHtml(report: SalesReportKind, periodLabel: string): { title: string; html: string } {
+export function buildSalesReportHtml(
+  report: SalesReportKind,
+  periodLabel: string,
+): { title: string; html: string } {
   if (report.kind === "summary") {
     const t = report.invoices;
     const totals = `<table border="1" cellspacing="0" cellpadding="6">
@@ -173,9 +176,8 @@ function jewelryTable(items: NonNullable<Invoice["jewelryItems"]>): string {
     .map(
       (it, i) =>
         `<tr><td>${i + 1}</td><td>${esc(it.description)}</td><td>${esc(it.karat)}</td><td>${esc(it.metalColour)}</td><td align="right">${it.netWeight}</td><td align="right">${it.finePercent}</td><td align="right">${it.fineGram}</td><td align="right">${num(it.metalRate)}</td><td align="right">${num(it.metalValue)}</td><td align="right">${num(it.makingRate)}</td><td align="right">${num(it.makingValue)}</td><td>${esc(
-          it.stones
-            .map((s) => `${s.stoneType} ${s.size} ${s.carat}ct @ ${s.rate}`)
-            .join("; ") || "—",
+          it.stones.map((s) => `${s.stoneType} ${s.size} ${s.carat}ct @ ${s.rate}`).join("; ") ||
+            "—",
         )}</td><td align="right">${num(it.stoneValue)}</td><td align="right">${num(it.total)}</td></tr>`,
     )
     .join("")}</tbody>
@@ -194,7 +196,10 @@ function diamondTable(lines: NonNullable<Invoice["lines"]>): string {
 </table>`;
 }
 
-export function invoiceCopyHtml(invoice: Invoice, customerName: string): { title: string; html: string } {
+export function invoiceCopyHtml(
+  invoice: Invoice,
+  customerName: string,
+): { title: string; html: string } {
   const items =
     invoice.invoiceKind === "jewelry"
       ? jewelryTable(invoice.jewelryItems ?? [])
@@ -211,7 +216,11 @@ export function invoiceCopyHtml(invoice: Invoice, customerName: string): { title
   const head = `<p>Invoice: <strong>${esc(invoice.number)}</strong><br />Customer: ${esc(customerName)}<br />Date: ${esc(formatDate(invoice.date))}${invoice.dueDate ? ` · Due: ${esc(formatDate(invoice.dueDate))}` : ""}${invoice.sellerName ? `<br />Seller: ${esc(invoice.sellerName)}` : ""}${invoice.platform ? `<br />Platform: ${esc(invoice.platform)}` : ""}</p>`;
   return {
     title: `Invoice ${invoice.number}`,
-    html: shell(`Invoice ${invoice.number}`, formatDate(invoice.date), `${head}${items}${totals}${invoice.notes ? `<p>Notes: ${esc(invoice.notes)}</p>` : ""}`),
+    html: shell(
+      `Invoice ${invoice.number}`,
+      formatDate(invoice.date),
+      `${head}${items}${totals}${invoice.notes ? `<p>Notes: ${esc(invoice.notes)}</p>` : ""}`,
+    ),
   };
 }
 

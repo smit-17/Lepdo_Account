@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDate, formatMoney, round2, todayISO } from "@/lib/lepdo/format";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 import { useLepdo } from "@/lib/lepdo/store";
 import { FormField, MODAL_CLASS } from "@/components/lepdo/sales/ui";
 
@@ -122,7 +123,9 @@ export function SupplierPaymentForm({
         .filter((a) => a.amount > 0),
     };
     if (store.isLikelyDuplicate(entry)) {
-      toast.error("A matching payment already exists for this date, account, amount and reference.");
+      toast.error(
+        "A matching payment already exists for this date, account, amount and reference.",
+      );
       return;
     }
     setSaving(true);
@@ -133,7 +136,9 @@ export function SupplierPaymentForm({
       return;
     }
     toast.success(
-      unallocated > 0 ? `Payment saved · ${formatMoney(unallocated)} kept as supplier advance.` : "Payment saved.",
+      unallocated > 0
+        ? `Payment saved · ${formatMoney(unallocated)} kept as supplier advance.`
+        : "Payment saved.",
     );
     onClose();
   }
@@ -151,7 +156,11 @@ export function SupplierPaymentForm({
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overflow-x-hidden px-5 py-5">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormField label="Date" required>
-              <Input type="date" value={form.date} onChange={(e) => setForm({ ...form, date: e.target.value })} />
+              <Input
+                type="date"
+                value={form.date}
+                onChange={(e) => setForm({ ...form, date: e.target.value })}
+              />
             </FormField>
             <FormField label="Supplier" required>
               <Select
@@ -174,11 +183,7 @@ export function SupplierPaymentForm({
               </Select>
             </FormField>
             <FormField label="Amount" required>
-              <Input
-                inputMode="decimal"
-                value={form.amount}
-                onChange={(e) => setForm({ ...form, amount: e.target.value })}
-              />
+              <MoneyInput value={toNum(form.amount)} onChange={(n) => setForm({ ...form, amount: String(n) })} />
             </FormField>
             <FormField label="Bank / cash account" required>
               <Select value={form.account} onValueChange={(v) => setForm({ ...form, account: v })}>
@@ -195,10 +200,17 @@ export function SupplierPaymentForm({
               </Select>
             </FormField>
             <FormField label="Reference / UTR">
-              <Input value={form.reference} onChange={(e) => setForm({ ...form, reference: e.target.value })} />
+              <Input
+                value={form.reference}
+                onChange={(e) => setForm({ ...form, reference: e.target.value })}
+              />
             </FormField>
             <FormField label="Notes (optional)">
-              <Textarea rows={1} value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} />
+              <Textarea
+                rows={1}
+                value={form.notes}
+                onChange={(e) => setForm({ ...form, notes: e.target.value })}
+              />
             </FormField>
           </div>
 
@@ -216,7 +228,9 @@ export function SupplierPaymentForm({
               </Button>
             </div>
             {!form.partyId ? (
-              <p className="mt-2 text-sm text-muted-foreground">Select a supplier to see open bills.</p>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Select a supplier to see open bills.
+              </p>
             ) : !openBills.length ? (
               <p className="mt-2 text-sm text-muted-foreground">
                 No open bills — the full amount will be kept as supplier advance.
@@ -236,13 +250,7 @@ export function SupplierPaymentForm({
                           {formatDate(bill.date)} · Pending {formatMoney(due)}
                         </p>
                       </div>
-                      <Input
-                        className="h-9"
-                        inputMode="decimal"
-                        placeholder="0"
-                        value={alloc[bill.id] ?? ""}
-                        onChange={(e) => setAlloc({ ...alloc, [bill.id]: e.target.value })}
-                      />
+                      <MoneyInput className="h-9" value={toNum(alloc[bill.id])} onChange={(n) => setAlloc({ ...alloc, [bill.id]: String(n) })} />
                     </div>
                   );
                 })}

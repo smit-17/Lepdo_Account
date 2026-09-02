@@ -40,3 +40,35 @@ export function rangeFor(
 export function periodLabel(preset: Preset): string {
   return PRESETS.find((p) => p.id === preset)?.label ?? "This Month";
 }
+
+/* ---------------- ISO week (Monday start), Asia/Kolkata calendar dates ---------------- */
+
+/** ISO-8601 week key "YYYY-Www" for a "YYYY-MM-DD" date string. */
+export function isoWeekKey(dateIso: string): string {
+  const [y, m, d] = dateIso.split("-").map(Number);
+  const date = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1));
+  const dayNum = (date.getUTCDay() + 6) % 7; // Mon=0..Sun=6
+  date.setUTCDate(date.getUTCDate() - dayNum + 3); // move to Thursday of this week
+  const firstThursday = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const firstDayNum = (firstThursday.getUTCDay() + 6) % 7;
+  firstThursday.setUTCDate(firstThursday.getUTCDate() - firstDayNum + 3);
+  const week = 1 + Math.round((date.getTime() - firstThursday.getTime()) / (7 * 86400000));
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/** [Monday, Sunday] date range ("YYYY-MM-DD") for an ISO week key "YYYY-Www". */
+export function isoWeekRange(key: string): readonly [string, string] {
+  const [yStr, wStr] = key.split("-W");
+  const y = Number(yStr);
+  const w = Number(wStr) || 1;
+  const jan4 = new Date(Date.UTC(y, 0, 4));
+  const jan4Day = (jan4.getUTCDay() + 6) % 7;
+  const week1Monday = new Date(jan4);
+  week1Monday.setUTCDate(jan4.getUTCDate() - jan4Day);
+  const monday = new Date(week1Monday);
+  monday.setUTCDate(week1Monday.getUTCDate() + (w - 1) * 7);
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const iso = (dd: Date) => dd.toISOString().slice(0, 10);
+  return [iso(monday), iso(sunday)];
+}

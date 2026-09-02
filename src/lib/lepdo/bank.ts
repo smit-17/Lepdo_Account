@@ -11,7 +11,13 @@ export interface BankMeta {
 
 /** Fixed LEPDO bank accounts shown as balance cards. */
 export const BANKS: BankMeta[] = [
-  { id: "bank_hdfc", bankName: "LEPDO HDFC", nickname: "LEPDO HDFC", last4: "4821", bg: "bg-pl-blue" },
+  {
+    id: "bank_hdfc",
+    bankName: "LEPDO HDFC",
+    nickname: "LEPDO HDFC",
+    last4: "4821",
+    bg: "bg-pl-blue",
+  },
   {
     id: "bank_indusind",
     bankName: "LEPDO IndusInd",
@@ -26,7 +32,13 @@ export const BANKS: BankMeta[] = [
     last4: "3390",
     bg: "bg-pl-purple",
   },
-  { id: "bank_sbi", bankName: "Brijes SBI", nickname: "Brijes SBI", last4: "9037", bg: "bg-pl-orange" },
+  {
+    id: "bank_sbi",
+    bankName: "Brijes SBI",
+    nickname: "Brijes SBI",
+    last4: "9037",
+    bg: "bg-pl-orange",
+  },
 ];
 
 export const BANK_SEED: BankAccount[] = BANKS.map((b) => ({
@@ -38,24 +50,99 @@ export const BANK_SEED: BankAccount[] = BANKS.map((b) => ({
   active: true,
 }));
 
-/** Categories offered on the bank ledger, in display order. */
+/**
+ * Categories offered on the bank ledger, in display order.
+ * Section-specific heads (sales, purchase, expense, drawings, uchhina, capital)
+ * are recorded inside their own sections and never here.
+ */
 export const BANK_CATEGORIES: { id: CategoryId; label: string }[] = [
-  { id: "sale_payment", label: "Sales Receipt" },
-  { id: "purchase_payment", label: "Purchase Payment" },
+  { id: "sale_payment", label: "Payment Received" },
+  { id: "purchase_payment", label: "Payment Paid" },
   { id: "expense", label: "Expense" },
-  { id: "uchhina_money_given", label: "Uchhina — Money Given" },
-  { id: "uchhina_money_received_back", label: "Uchhina — Money Received Back" },
-  { id: "uchhina_received", label: "Uchhina — Money Taken" },
-  { id: "uchhina_given", label: "Uchhina — Money Returned" },
+  { id: "owner_drawing", label: "UPI / Personal Withdrawal" },
+  { id: "uchhina_money_given", label: "Uchhina" },
+  { id: "uchhina_money_received_back", label: "Uchhina" },
+  { id: "owner_investment", label: "Money Added / Capital" },
   { id: "bank_transfer", label: "Bank Transfer" },
-  { id: "owner_drawing", label: "Founder Drawing" },
-  { id: "owner_investment", label: "Capital / Investment" },
-  { id: "customer_refund", label: "Customer Refund" },
-  { id: "loan_emi", label: "Loan / EMI" },
+  { id: "bank_to_cash", label: "Bank Transfer" },
+  { id: "other", label: "Other" },
+  // retired — historical rows only, no longer offered for new entries
   { id: "bank_charges", label: "Bank Charges" },
-  { id: "interest", label: "Interest" },
+  { id: "customer_refund", label: "Customer Refund" },
+  { id: "supplier_refund", label: "Supplier Refund" },
+];
+
+/** UI-level category shown on the "Add Bank Entry" form (Uchhina is one option; the
+ *  actual uchhina_* CategoryId is resolved from the chosen in/out direction). */
+export type BankUiCategory =
+  | "sale_payment"
+  | "purchase_payment"
+  | "expense"
+  | "owner_drawing"
+  | "uchhina"
+  | "owner_investment"
+  | "bank_transfer"
+  | "other";
+
+/** Exact set of categories offered for NEW bank entries, in display order. */
+export const BANK_ENTRY_OPTIONS: { id: BankUiCategory; label: string }[] = [
+  { id: "sale_payment", label: "Payment Received" },
+  { id: "purchase_payment", label: "Payment Paid" },
+  { id: "expense", label: "Expense" },
+  { id: "owner_drawing", label: "UPI / Personal Withdrawal" },
+  { id: "uchhina", label: "Uchhina" },
+  { id: "owner_investment", label: "Money Added / Capital" },
+  { id: "bank_transfer", label: "Bank Transfer" },
   { id: "other", label: "Other" },
 ];
+
+/** Fixed direction for bank entry choices that can only go one way. Returns null when
+ *  the user must choose (Uchhina, Bank Transfer, Other). */
+export function bankFixedDirection(id: BankUiCategory | ""): "in" | "out" | null {
+  if (id === "sale_payment" || id === "owner_investment") return "in";
+  if (id === "purchase_payment" || id === "expense" || id === "owner_drawing") return "out";
+  return null;
+}
+
+/** Resolve the Uchhina UI choice + direction into the real ledger category. */
+export function resolveUchhinaCategory(direction: "in" | "out"): CategoryId {
+  return direction === "in" ? "uchhina_money_received_back" : "uchhina_money_given";
+}
+
+/** Resolve the merged Bank Transfer UI choice into the real ledger category
+ *  based on where the money is going. */
+export function resolveTransferCategory(destinationType: "bank" | "cash"): CategoryId {
+  return destinationType === "cash" ? "bank_to_cash" : "bank_transfer";
+}
+
+/** Map a stored CategoryId back onto the BankUiCategory shown on the Add/Edit Bank Entry
+ *  form (used to preselect the right UI option when editing an existing entry). */
+export function uiCategoryFromCategoryId(id: CategoryId | null): BankUiCategory | "" {
+  switch (id) {
+    case "sale_payment":
+      return "sale_payment";
+    case "purchase_payment":
+      return "purchase_payment";
+    case "expense":
+      return "expense";
+    case "owner_drawing":
+      return "owner_drawing";
+    case "uchhina_money_given":
+    case "uchhina_money_received_back":
+    case "uchhina_given":
+    case "uchhina_received":
+      return "uchhina";
+    case "owner_investment":
+      return "owner_investment";
+    case "bank_transfer":
+    case "bank_to_cash":
+      return "bank_transfer";
+    case null:
+      return "";
+    default:
+      return "other";
+  }
+}
 
 export type BankPreset = "month" | "prev_month" | "fy" | "custom";
 

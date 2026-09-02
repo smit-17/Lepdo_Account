@@ -1,5 +1,23 @@
-import { useState, type ReactNode } from "react";
-import { Download, FileSpreadsheet, FileText, Printer, X } from "lucide-react";
+import { useId, useState, type ReactNode } from "react";
+import {
+  Check,
+  ChevronsUpDown,
+  Download,
+  FileSpreadsheet,
+  FileText,
+  Plus,
+  Printer,
+  X,
+} from "lucide-react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -18,12 +36,18 @@ import {
   type ExportTable,
 } from "@/lib/lepdo/exportTable";
 import type { Tone } from "@/lib/lepdo/extras";
+import { useLepdo } from "@/lib/lepdo/store";
+import { masterOptions } from "@/lib/lepdo/masters";
 
 /** LEPDO pastel tone classes — background + matching dark text. */
 export const TONE: Record<Tone, { bg: string; text: string; chip: string }> = {
   blue: { bg: "bg-sl-total-bg", text: "text-sl-total", chip: "bg-sl-total-bg text-sl-total" },
   green: { bg: "bg-sl-paid-bg", text: "text-sl-paid", chip: "bg-sl-paid-bg text-sl-paid" },
-  red: { bg: "bg-sl-pending-bg", text: "text-sl-pending", chip: "bg-sl-pending-bg text-sl-pending" },
+  red: {
+    bg: "bg-sl-pending-bg",
+    text: "text-sl-pending",
+    chip: "bg-sl-pending-bg text-sl-pending",
+  },
   purple: {
     bg: "bg-sl-advance-bg",
     text: "text-sl-advance",
@@ -35,7 +59,11 @@ export const TONE: Record<Tone, { bg: string; text: string; chip: string }> = {
     text: "text-sl-customer",
     chip: "bg-sl-customer-bg text-sl-customer",
   },
-  grey: { bg: "bg-sl-settled-bg", text: "text-sl-settled", chip: "bg-sl-settled-bg text-sl-settled" },
+  grey: {
+    bg: "bg-sl-settled-bg",
+    text: "text-sl-settled",
+    chip: "bg-sl-settled-bg text-sl-settled",
+  },
   navy: { bg: "bg-gold-tint", text: "text-navy", chip: "bg-gold-tint text-navy" },
 };
 
@@ -275,6 +303,128 @@ export function TextField({
   );
 }
 
+/**
+ * Searchable dropdown: click opens a real list, typing filters it and (when
+ * allowed) a brand-new value can be added on the fly. Used for every
+ * master-driven field so desktop and mobile behave identically.
+ */
+export function SearchSelect({
+  value,
+  options,
+  onChange,
+  placeholder,
+  className,
+  allowCreate = true,
+  onCreate,
+}: {
+  value: string;
+  options: readonly string[];
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  allowCreate?: boolean;
+  onCreate?: (v: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const trimmed = query.trim();
+  const filtered = trimmed
+    ? options.filter((o) => o.toLowerCase().includes(trimmed.toLowerCase()))
+    : options;
+  const canCreate =
+    allowCreate && !!trimmed && !options.some((o) => o.toLowerCase() === trimmed.toLowerCase());
+
+  const pick = (v: string, isNew: boolean) => {
+    if (isNew) onCreate?.(v);
+    onChange(v);
+    setQuery("");
+    setOpen(false);
+  };
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn(
+            "h-9 w-full justify-between px-3 text-left text-sm font-normal",
+            !value && "text-muted-foreground",
+            className,
+          )}
+        >
+          <span className="truncate">{value || placeholder || "Select or type a value"}</span>
+          <ChevronsUpDown className="ml-2 size-3.5 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        className="w-[min(20rem,calc(100vw-2rem))] p-0"
+        onOpenAutoFocus={(e) => e.preventDefault()}
+      >
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder="Search or type new…"
+            value={query}
+            onValueChange={setQuery}
+          />
+          <CommandList>
+            {!filtered.length && !canCreate ? <CommandEmpty>No matches.</CommandEmpty> : null}
+            <CommandGroup>
+              {filtered.map((o) => (
+                <CommandItem key={o} value={o} onSelect={() => pick(o, false)}>
+                  <Check className={cn("size-3.5", value === o ? "opacity-100" : "opacity-0")} />
+                  {o}
+                </CommandItem>
+              ))}
+              {canCreate ? (
+                <CommandItem value={`__add_${trimmed}`} onSelect={() => pick(trimmed, true)}>
+                  <Plus className="size-3.5" /> Add “{trimmed}”
+                </CommandItem>
+              ) : null}
+            </CommandGroup>
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+/** Searchable dropdown backed by a Settings → Master Data list. */
+export function MasterCombo({
+  masterId,
+  value,
+  onChange,
+  placeholder,
+  className,
+  includeInactive,
+  allowCreate = true,
+}: {
+  masterId: string;
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  className?: string;
+  includeInactive?: boolean;
+  allowCreate?: boolean;
+}) {
+  const store = useLepdo();
+  const options = masterOptions(store.masters, masterId, includeInactive);
+  return (
+    <SearchSelect
+      value={value}
+      options={options}
+      onChange={onChange}
+      {...(placeholder !== undefined ? { placeholder } : {})}
+      {...(className !== undefined ? { className } : {})}
+      allowCreate={allowCreate}
+      onCreate={(v) => store.saveMaster(masterId, { name: v })}
+    />
+  );
+}
+
 export function ProgressBar({ percent, tone = "green" }: { percent: number; tone?: Tone }) {
   const pct = Math.max(0, Math.min(100, percent));
   return (
@@ -293,7 +443,12 @@ export function AuditLine({
   sourceModule,
   onViewSource,
 }: {
-  record: { createdBy: string; createdAt: string; updatedBy?: string | undefined; updatedAt: string };
+  record: {
+    createdBy: string;
+    createdAt: string;
+    updatedBy?: string | undefined;
+    updatedAt: string;
+  };
   sourceModule?: string | undefined;
   onViewSource?: (() => void) | undefined;
 }) {

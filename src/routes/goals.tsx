@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { PageHeading } from "@/components/lepdo/bits";
 import {
+  Chip,
   DownloadMenu,
   EmptyState,
   Field,
@@ -15,6 +16,7 @@ import {
   SectionCard,
   StatCard,
 } from "@/components/lepdo/shared";
+import { MoneyInput } from "@/components/lepdo/numeric";
 import { useLepdo } from "@/lib/lepdo/store";
 import { formatMoney, round2, todayISO } from "@/lib/lepdo/format";
 import { fyOf, goalPercent, goalRange, periodKeyFor, type Tone } from "@/lib/lepdo/extras";
@@ -43,7 +45,8 @@ export const Route = createFileRoute("/goals")({
   component: GoalsPage,
 });
 
-type Period = "yearly" | "monthly" | "daily";
+type Period = "yearly" | "monthly" | "weekly" | "daily";
+type ViewPeriod = "yearly" | "monthly" | "weekly" | "daily";
 type Scope = "overall" | "seller" | "platform";
 
 interface CardSpec {
@@ -60,7 +63,7 @@ function currentFyOptions(): string[] {
 
 function GoalsPage() {
   const store = useLepdo();
-  const [period, setPeriod] = useState<Period>("yearly");
+  const [period, setPeriod] = useState<ViewPeriod>("yearly");
 
   if (!store.ready) {
     return (
@@ -77,16 +80,18 @@ function GoalsPage() {
     <div className="w-full max-w-full space-y-4 overflow-x-hidden">
       <PageHeading title="Goals" breadcrumb="LEPDO / Goals" />
 
-      <Tabs value={period} onValueChange={(v) => setPeriod(v as Period)}>
+      <Tabs value={period} onValueChange={(v) => setPeriod(v as ViewPeriod)}>
         <TabsList>
-          <TabsTrigger value="yearly">Yearly</TabsTrigger>
-          <TabsTrigger value="monthly">Monthly</TabsTrigger>
-          <TabsTrigger value="daily">Daily</TabsTrigger>
+          <TabsTrigger value="daily">Day</TabsTrigger>
+          <TabsTrigger value="weekly">Week</TabsTrigger>
+          <TabsTrigger value="monthly">Month</TabsTrigger>
+          <TabsTrigger value="yearly">Financial Year</TabsTrigger>
         </TabsList>
       </Tabs>
 
       {period === "yearly" ? <GoalsPanel key="yearly" period="yearly" /> : null}
       {period === "monthly" ? <GoalsPanel key="monthly" period="monthly" /> : null}
+      {period === "weekly" ? <GoalsPanel key="weekly" period="weekly" /> : null}
       {period === "daily" ? <GoalsPanel key="daily" period="daily" /> : null}
     </div>
   );
@@ -238,6 +243,15 @@ function GoalsPanel({ period }: { period: Period }) {
                 onChange={(e) => setPeriodKey(e.target.value || periodKeyFor(period))}
               />
             </Field>
+          ) : period === "weekly" ? (
+            <Field label="Week">
+              <Input
+                type="week"
+                className="h-9 w-44"
+                value={periodKey}
+                onChange={(e) => setPeriodKey(e.target.value || periodKeyFor(period))}
+              />
+            </Field>
           ) : (
             <Field label="Date">
               <Input
@@ -291,6 +305,7 @@ function GoalsPanel({ period }: { period: Period }) {
         goalOf={goalOf}
         achievedOf={achievedOf}
         onEdit={setEditing}
+        deadline={to}
       />
       <GoalGroup
         title="Seller-Wise Goals"
@@ -298,6 +313,7 @@ function GoalsPanel({ period }: { period: Period }) {
         goalOf={goalOf}
         achievedOf={achievedOf}
         onEdit={setEditing}
+        deadline={to}
       />
       <GoalGroup
         title="Platform-Wise Goals"
@@ -305,6 +321,7 @@ function GoalsPanel({ period }: { period: Period }) {
         goalOf={goalOf}
         achievedOf={achievedOf}
         onEdit={setEditing}
+        deadline={to}
       />
 
       {periodGoals.length > 0 ? (
@@ -312,7 +329,7 @@ function GoalsPanel({ period }: { period: Period }) {
           title="Goals Table"
           actions={<DownloadMenu build={buildTable} label="Download" />}
         >
-          <GoalsTable goals={periodGoals} achievedOf={achievedOf} />
+          <GoalsTable goals={periodGoals} achievedOf={achievedOf} deadline={to} />
         </SectionCard>
       ) : null}
 
@@ -334,14 +351,17 @@ function GoalGroup({
   goalOf,
   achievedOf,
   onEdit,
+  deadline,
 }: {
   title: string;
   cards: CardSpec[];
   goalOf: (scope: Scope, target: string) => Goal | undefined;
   achievedOf: (scope: Scope, target: string) => number;
   onEdit: (spec: CardSpec) => void;
+  deadline?: string;
 }) {
   if (cards.length === 0) return null;
+  const today = todayISO();
   return (
     <SectionCard title={title}>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -352,6 +372,8 @@ function GoalGroup({
           const pending = round2(Math.max(amount - achieved, 0));
           const percent = goalPercent(amount, achieved);
           const tone: Tone = percent >= 100 ? "green" : percent >= 50 ? "yellow" : "red";
+          const completed = percent >= 100;
+          const overdue = !completed && !!deadline && deadline < today && !!goal;
           return (
             <div
               key={`${c.scope}-${c.target}`}
@@ -363,6 +385,9 @@ function GoalGroup({
                   {goal ? "Edit Goal" : "Set Goal"}
                 </Button>
               </div>
+              {deadline ? (
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Deadline: {deadline}</p>
+              ) : null}
               <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
                 <div>
                   <p className="text-muted-foreground">Goal</p>
@@ -384,6 +409,13 @@ function GoalGroup({
                 </div>
                 <ProgressBar percent={percent} tone={tone} />
               </div>
+              {goal ? (
+                <div className="mt-2">
+                  <Chip tone={completed ? "green" : overdue ? "red" : "grey"}>
+                    {completed ? "Completed" : overdue ? "Overdue" : "In Progress"}
+                  </Chip>
+                </div>
+              ) : null}
             </div>
           );
         })}
@@ -395,38 +427,56 @@ function GoalGroup({
 function GoalsTable({
   goals,
   achievedOf,
+  deadline,
 }: {
   goals: Goal[];
   achievedOf: (scope: Scope, target: string) => number;
+  deadline?: string;
 }) {
+  const today = todayISO();
+  function statusOf(percent: number, goal: Goal) {
+    const completed = percent >= 100;
+    const overdue = !completed && !!deadline && deadline < today;
+    return completed ? "Completed" : overdue ? "Overdue" : "In Progress";
+  }
   return (
     <>
       <div className="hidden overflow-x-auto sm:block">
-        <table className="w-full min-w-[720px] text-sm">
+        <table className="w-full min-w-[860px] text-sm">
           <thead>
             <tr className="border-b border-border text-left text-xs text-muted-foreground">
               <th className="py-2 pr-2">Scope</th>
               <th className="py-2 pr-2">Target</th>
               <th className="py-2 pr-2">Period</th>
+              <th className="py-2 pr-2">Deadline</th>
               <th className="py-2 pr-2 text-right">Goal</th>
               <th className="py-2 pr-2 text-right">Achieved</th>
               <th className="py-2 pr-2 text-right">Pending</th>
               <th className="py-2 pr-2 text-right">Achievement %</th>
+              <th className="py-2 pr-2">Status</th>
             </tr>
           </thead>
           <tbody>
             {goals.map((g) => {
               const achieved = achievedOf(g.scope, g.target);
               const pending = round2(Math.max(g.amount - achieved, 0));
+              const percent = goalPercent(g.amount, achieved);
+              const status = statusOf(percent, g);
               return (
                 <tr key={g.id} className="border-b border-border last:border-0">
                   <td className="py-2 pr-2 capitalize">{g.scope}</td>
                   <td className="py-2 pr-2">{g.scope === "overall" ? "—" : g.target}</td>
                   <td className="py-2 pr-2">{g.periodKey}</td>
+                  <td className="py-2 pr-2">{deadline ?? "—"}</td>
                   <td className="num py-2 pr-2 text-right">{formatMoney(g.amount)}</td>
                   <td className="num py-2 pr-2 text-right">{formatMoney(achieved)}</td>
                   <td className="num py-2 pr-2 text-right">{formatMoney(pending)}</td>
-                  <td className="num py-2 pr-2 text-right">{goalPercent(g.amount, achieved)}%</td>
+                  <td className="num py-2 pr-2 text-right">{percent}%</td>
+                  <td className="py-2 pr-2">
+                    <Chip tone={status === "Completed" ? "green" : status === "Overdue" ? "red" : "grey"}>
+                      {status}
+                    </Chip>
+                  </td>
                 </tr>
               );
             })}
@@ -437,17 +487,26 @@ function GoalsTable({
         {goals.map((g) => {
           const achieved = achievedOf(g.scope, g.target);
           const pending = round2(Math.max(g.amount - achieved, 0));
+          const percent = goalPercent(g.amount, achieved);
+          const status = statusOf(percent, g);
           return (
             <div key={g.id} className="rounded-lg border border-border p-2 text-xs">
-              <p className="font-semibold capitalize text-navy">
-                {g.scope} {g.scope === "overall" ? "" : `· ${g.target}`}
+              <div className="flex items-center justify-between">
+                <p className="font-semibold capitalize text-navy">
+                  {g.scope} {g.scope === "overall" ? "" : `· ${g.target}`}
+                </p>
+                <Chip tone={status === "Completed" ? "green" : status === "Overdue" ? "red" : "grey"}>
+                  {status}
+                </Chip>
+              </div>
+              <p className="text-muted-foreground">
+                {g.periodKey} {deadline ? `· Deadline ${deadline}` : ""}
               </p>
-              <p className="text-muted-foreground">{g.periodKey}</p>
               <div className="mt-1 grid grid-cols-2 gap-1">
                 <span>Goal: {formatMoney(g.amount)}</span>
                 <span>Achieved: {formatMoney(achieved)}</span>
                 <span>Pending: {formatMoney(pending)}</span>
-                <span>Achv%: {goalPercent(g.amount, achieved)}%</span>
+                <span>Achv%: {percent}%</span>
               </div>
             </div>
           );
@@ -586,12 +645,9 @@ function GoalModal({
     >
       <div className="space-y-4">
         <Field label="Goal Amount">
-          <Input
-            type="number"
-            min={0}
-            className="h-9"
-            value={amount}
-            onChange={(e) => setAmount(e.target.value)}
+          <MoneyInput
+            value={amount === "" ? 0 : Number(amount)}
+            onChange={(n) => setAmount(String(n))}
             placeholder="0"
           />
         </Field>

@@ -1,6 +1,10 @@
+import { isLedgerEntry, isPosted } from "./entry";
 import { round2, todayISO } from "./format";
+import { isoWeekKey, isoWeekRange } from "./period";
 import type {
   AppSettings,
+  EmiPlan,
+  EmiPayment,
   Goal,
   Liability,
   LiabilityEntry,
@@ -62,7 +66,9 @@ export function buildLiabilityView(liability: Liability, entries: LiabilityEntry
   let interestPaid = 0;
   const sorted = entries
     .filter((e) => e.liabilityId === liability.id && !e.voided)
-    .sort((a, b) => (a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date)));
+    .sort((a, b) =>
+      a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
+    );
 
   for (const e of sorted) {
     const principal = round2(e.principal ?? 0);
@@ -116,8 +122,12 @@ export function buildCapitalViews(
   partyNameOf: (id: string | null) => string,
 ): CapitalView[] {
   const rows = transactions.filter(
-    (t) => !t.voided && (t.category === "owner_investment" || t.category === "owner_drawing"),
+    (t) =>
+      isPosted(t) &&
+      !isLedgerEntry(t) &&
+      (t.category === "owner_investment" || t.category === "owner_drawing"),
   );
+
   const buckets: CapitalView[] = [
     ...CAPITAL_BUCKETS.map((b) => ({
       key: b.key,
@@ -128,7 +138,15 @@ export function buildCapitalViews(
       balance: 0,
       rows: [] as Transaction[],
     })),
-    { key: "other", label: "Other Investment", tone: "orange", invested: 0, withdrawn: 0, balance: 0, rows: [] },
+    {
+      key: "other",
+      label: "Other Investment",
+      tone: "orange",
+      invested: 0,
+      withdrawn: 0,
+      balance: 0,
+      rows: [],
+    },
   ];
   for (const t of rows) {
     const name = `${partyNameOf(t.partyId)} ${t.particulars}`.toLowerCase();
@@ -160,7 +178,9 @@ export interface StockView {
 export function buildStockView(entries: StockEntry[], stock: StockEntry["stock"]): StockView {
   const sorted = entries
     .filter((e) => e.stock === stock && !e.voided)
-    .sort((a, b) => (a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date)));
+    .sort((a, b) =>
+      a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
+    );
   const rows: StockRow[] = [];
   let balance = 0;
   let valueIn = 0;
@@ -215,11 +235,11 @@ export function teamTotals(payments: TeamPayment[]): TeamTotals {
   const bonus = sum((p) => p.type === "bonus");
   const deduction = sum((p) => p.type === "deduction");
   const gross = round2(
-    live
-      .filter((p) => p.type !== "deduction")
-      .reduce((s, p) => s + p.amount, 0) - deduction,
+    live.filter((p) => p.type !== "deduction").reduce((s, p) => s + p.amount, 0) - deduction,
   );
-  const paid = round2(live.filter((p) => p.paid && p.type !== "deduction").reduce((s, p) => s + p.amount, 0));
+  const paid = round2(
+    live.filter((p) => p.paid && p.type !== "deduction").reduce((s, p) => s + p.amount, 0),
+  );
   return { salary, incentive, bonus, deduction, paid, pending: round2(Math.max(0, gross - paid)) };
 }
 
@@ -241,6 +261,7 @@ export function fyRange(fy: string): readonly [string, string] {
 export function periodKeyFor(period: GoalPeriod, iso = todayISO()): string {
   if (period === "yearly") return fyOf(iso);
   if (period === "monthly") return iso.slice(0, 7);
+  if (period === "weekly") return isoWeekKey(iso);
   return iso;
 }
 
@@ -251,6 +272,7 @@ export function goalRange(period: GoalPeriod, key: string): readonly [string, st
     const last = new Date(Date.UTC(y ?? 2026, m ?? 1, 0)).toISOString().slice(0, 10);
     return [`${key}-01`, last];
   }
+  if (period === "weekly") return isoWeekRange(key);
   return [key, key];
 }
 
@@ -265,14 +287,16 @@ export const DEFAULT_SETTINGS: AppSettings = {
   business: {
     name: "LEPDO",
     legalName: "LEPDO Diamonds & Jewellery",
-    gstin: "",
-    phone: "",
+    gstin: "24NACPS0875L1Z2",
+    phone: "+91 9638551535",
     email: "",
-    address: "",
-    city: "",
-    state: "",
+    address: "B-902 Pragati IT Park, Surat, India",
+    city: "Surat",
+    state: "Gujarat",
     financialYearStart: "04-01",
     currency: "INR",
+    iec: "NACPS0875L",
+    usaAddress: "Elmwood Park, New Jersey, USA",
   },
   branding: {
     primary: "#2D2D61",
@@ -280,6 +304,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     font: "System / Inter",
     invoiceHeader: "LEPDO — Diamonds & Jewellery",
     invoiceFooter: "Thank you for your business.",
+    pastel: "#F3F4FB",
+    logoDataUrl: "",
   },
   invoice: {
     salesPrefix: "LEP/S/",
@@ -296,6 +322,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
     terms: "Payment due within the agreed credit period.",
     bankDetails: "",
     signature: "For LEPDO",
+    title: "Proforma Invoice",
   },
   rules: {
     duplicateProtection: true,
@@ -307,7 +334,72 @@ export const DEFAULT_SETTINGS: AppSettings = {
   security: {
     role: "Owner",
     twoPersonVoid: false,
+    users: [],
+    idleTimeoutMinutes: 30,
   },
 };
 
 export type Tone = "blue" | "green" | "red" | "purple" | "orange" | "yellow" | "grey" | "navy";
+
+/* ---------------- EMI Tracker ---------------- */
+
+export interface EmiScheduleRow {
+  month: string; // YYYY-MM
+  dueDate: string; // YYYY-MM-DD
+  amount: number;
+  paid: boolean;
+  payment?: EmiPayment | undefined;
+  status: "Paid" | "Unpaid" | "Overdue";
+}
+
+export interface EmiPlanView {
+  plan: EmiPlan;
+  schedule: EmiScheduleRow[];
+  paidCount: number;
+  remainingCount: number;
+  overdueCount: number;
+}
+
+function addMonthsClampDay(startDate: string, months: number, day: number): string {
+  const [y, m] = startDate.split("-").map(Number);
+  const base = new Date(Date.UTC(y ?? 2026, (m ?? 1) - 1 + months, 1));
+  const lastDay = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 0)).getUTCDate();
+  const d = Math.min(day, lastDay);
+  return new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), d)).toISOString().slice(0, 10);
+}
+
+/** Builds the month-wise EMI schedule and merges with recorded payments. */
+export function buildEmiSchedule(
+  plan: EmiPlan,
+  payments: EmiPayment[],
+  today = todayISO(),
+): EmiPlanView {
+  const paymentsByMonth = new Map(
+    payments.filter((p) => p.planId === plan.id && !p.voided).map((p) => [p.month, p]),
+  );
+
+  let count = plan.installments ?? 0;
+  if (!count && plan.endDate) {
+    const [sy, sm] = plan.startDate.split("-").map(Number);
+    const [ey, em] = plan.endDate.split("-").map(Number);
+    count = ((ey ?? 0) - (sy ?? 0)) * 12 + ((em ?? 0) - (sm ?? 0)) + 1;
+  }
+  if (!count || count < 1) count = 1;
+
+  const schedule: EmiScheduleRow[] = [];
+  for (let i = 0; i < count; i++) {
+    const dueDate = addMonthsClampDay(plan.startDate, i, plan.dueDay);
+    const month = dueDate.slice(0, 7);
+    const payment = paymentsByMonth.get(month);
+    const paid = !!payment;
+    const status: EmiScheduleRow["status"] = paid
+      ? "Paid"
+      : dueDate < today
+        ? "Overdue"
+        : "Unpaid";
+    schedule.push({ month, dueDate, amount: plan.amount, paid, payment, status });
+  }
+  const paidCount = schedule.filter((r) => r.paid).length;
+  const overdueCount = schedule.filter((r) => r.status === "Overdue").length;
+  return { plan, schedule, paidCount, remainingCount: schedule.length - paidCount, overdueCount };
+}

@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { formatDate, formatMoney } from "./format";
 
 export interface ExportColumn {
@@ -37,7 +38,8 @@ function cell(col: ExportColumn, row: ExportRow, raw = false): string {
   return String(v);
 }
 
-function download(content: BlobPart, filename: string, mime: string) {
+function download(content: BlobPart, filename: string, mime: string): boolean {
+  if (typeof document === "undefined") return false;
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
   const a = document.createElement("a");
   a.href = url;
@@ -46,10 +48,14 @@ function download(content: BlobPart, filename: string, mime: string) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }
 
 function slug(s: string) {
-  return s.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)/g, "");
 }
 
 export function tableHtml(t: ExportTable): string {
@@ -103,11 +109,21 @@ ${summary}
 </body></html>`;
 }
 
-export function downloadTableExcel(t: ExportTable) {
-  download(tableHtml(t), `lepdo-${slug(t.title)}.xls`, "application/vnd.ms-excel");
+export function downloadTableExcel(t: ExportTable): boolean {
+  if (typeof document === "undefined") return false;
+  if (!t.rows.length) {
+    toast.error("Nothing to export — no rows match the current filters.");
+    return false;
+  }
+  return download(tableHtml(t), `lepdo-${slug(t.title)}.xls`, "application/vnd.ms-excel");
 }
 
-export function downloadTableCsv(t: ExportTable) {
+export function downloadTableCsv(t: ExportTable): boolean {
+  if (typeof document === "undefined") return false;
+  if (!t.rows.length) {
+    toast.error("Nothing to export — no rows match the current filters.");
+    return false;
+  }
   const lines = [
     esc(`LEPDO — ${t.title}`),
     ...(t.subtitle ? [esc(t.subtitle)] : []),
@@ -117,10 +133,15 @@ export function downloadTableCsv(t: ExportTable) {
     ...t.rows.map((r) => t.columns.map((c) => esc(cell(c, r, true))).join(",")),
     ...(t.totals ? [t.columns.map((c) => esc(cell(c, t.totals ?? {}, true))).join(",")] : []),
   ];
-  download(lines.join("\n"), `lepdo-${slug(t.title)}.csv`, "text/csv;charset=utf-8");
+  return download(lines.join("\n"), `lepdo-${slug(t.title)}.csv`, "text/csv;charset=utf-8");
 }
 
 export function downloadTablePdf(t: ExportTable): boolean {
+  if (typeof document === "undefined" || typeof window === "undefined") return false;
+  if (!t.rows.length) {
+    toast.error("Nothing to export — no rows match the current filters.");
+    return false;
+  }
   const w = window.open("", "_blank", "width=980,height=760");
   if (!w) return false;
   w.document.write(tableHtml(t));

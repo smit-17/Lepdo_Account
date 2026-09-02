@@ -20,7 +20,6 @@ export interface ShellContextValue {
   /** primary action registered by a page for the header (e.g. "+ Add Sale") */
   pageAction: { label: string; run: () => void } | null;
   setPageAction: (action: { label: string; run: () => void } | null) => void;
-
 }
 
 export const ShellContext = createContext<ShellContextValue | null>(null);

@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { Landmark, MoreVertical, Plus, Wallet } from "lucide-react";
+import { AlertTriangle, CalendarClock, CheckCircle2, Landmark, MoreVertical, Plus, Wallet } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -38,7 +38,9 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { cn } from "@/lib/utils";
 import { formatDate, formatDateTime, formatMoney, todayISO } from "@/lib/lepdo/format";
-import { useLepdo, partyName } from "@/lib/lepdo/store";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
+import { useLepdo, partyName, type NewEntryInput } from "@/lib/lepdo/store";
+import { DRAWING_ACCOUNTS, DRAWING_PARTIES } from "@/lib/lepdo/drawings";
 import { useShell } from "@/components/lepdo/shell-context";
 import { PageHeading } from "@/components/lepdo/bits";
 import {
@@ -57,6 +59,7 @@ import {
 } from "@/components/lepdo/shared";
 import {
   buildCapitalViews,
+  buildEmiSchedule,
   buildLiabilityView,
   LIABILITY_KINDS,
   LIABILITY_ENTRY_TYPES,
@@ -65,7 +68,7 @@ import {
   type Tone,
 } from "@/lib/lepdo/extras";
 import type { ExportTable } from "@/lib/lepdo/exportTable";
-import type { Liability, LiabilityEntry, LiabilityKind, Transaction } from "@/lib/lepdo/types";
+import type { EmiPayment, EmiPlan, Liability, LiabilityEntry, LiabilityKind, SourceType, Transaction } from "@/lib/lepdo/types";
 
 export const Route = createFileRoute("/capital")({
   head: () => ({
@@ -74,12 +77,13 @@ export const Route = createFileRoute("/capital")({
       {
         name: "description",
         content:
-          "Founder capital, investment and liability register for LEPDO — capital balances, borrowings, EMIs and interest, derived automatically from Bank and Cash entries.",
+          "Founder capital, investment and liability register for LEPDO — capital balances, borrowings, EMIs and interest.",
       },
       { property: "og:title", content: "Capital, Investment & Liabilities — LEPDO Accounting" },
       {
         property: "og:description",
-        content: "Track founder capital, investments and liabilities with running balances and audit trail.",
+        content:
+          "Track founder capital, investments and liabilities with running balances and audit trail.",
       },
       { property: "og:type", content: "website" },
       { name: "twitter:card", content: "summary_large_image" },
@@ -111,12 +115,16 @@ function CapitalPage() {
         <TabsList>
           <TabsTrigger value="capital">Capital &amp; Investment</TabsTrigger>
           <TabsTrigger value="liabilities">Liabilities</TabsTrigger>
+          <TabsTrigger value="emi">EMI Tracker</TabsTrigger>
         </TabsList>
         <TabsContent value="capital" className="mt-4">
           {tab === "capital" ? <CapitalTab /> : null}
         </TabsContent>
         <TabsContent value="liabilities" className="mt-4">
           {tab === "liabilities" ? <LiabilitiesTab /> : null}
+        </TabsContent>
+        <TabsContent value="emi" className="mt-4">
+          {tab === "emi" ? <EmiTab /> : null}
         </TabsContent>
       </Tabs>
     </div>
@@ -125,9 +133,124 @@ function CapitalPage() {
 
 /* ================= Capital & Investment ================= */
 
+interface CapitalForm {
+  id: string | null;
+  date: string;
+  partyId: string;
+  category: "owner_investment" | "owner_drawing";
+  sourceType: SourceType;
+  accountId: string;
+  amount: string;
+  particulars: string;
+  reference: string;
+  notes: string;
+}
+
+const emptyCapitalForm = (): CapitalForm => ({
+  id: null,
+  date: todayISO(),
+  partyId: DRAWING_PARTIES[0]?.id ?? "",
+  category: "owner_investment",
+  sourceType: "bank",
+  accountId: "",
+  amount: "",
+  particulars: "",
+  reference: "",
+  notes: "",
+});
+
 function CapitalTab() {
   const store = useLepdo();
   const [source, setSource] = useState<Transaction | null>(null);
+  const [formOpen, setFormOpen] = useState(false);
+  const [form, setForm] = useState<CapitalForm>(emptyCapitalForm);
+  const [voidTarget, setVoidTarget] = useState<Transaction | null>(null);
+  const [voidReason, setVoidReason] = useState("");
+
+  const partyOptions = useMemo(() => {
+    const list = [...DRAWING_PARTIES.map((p) => ({ id: p.id, name: p.name }))];
+    for (const p of store.parties) {
+      if (p.type === "founder" && !list.some((x) => x.id === p.id)) {
+        list.push({ id: p.id, name: p.name });
+      }
+    }
+    return list;
+  }, [store.parties]);
+
+  const accounts = useMemo(
+    () =>
+      form.sourceType === "bank"
+        ? store.bankAccounts.map((b) => ({ id: b.id, label: b.nickname || b.bankName }))
+        : store.cashLocations.map((c) => ({ id: c.id, label: c.name })),
+    [form.sourceType, store.bankAccounts, store.cashLocations],
+  );
+
+  const openAdd = () => {
+    setForm(emptyCapitalForm());
+    setFormOpen(true);
+  };
+
+  const openEdit = (t: Transaction) => {
+    setForm({
+      id: t.id,
+      date: t.date,
+      partyId: t.partyId ?? (DRAWING_PARTIES[0]?.id ?? ""),
+      category: t.category === "owner_drawing" ? "owner_drawing" : "owner_investment",
+      sourceType: t.sourceType,
+      accountId: t.accountId,
+      amount: String(t.amount),
+      particulars: t.particulars,
+      reference: t.reference ?? "",
+      notes: t.notes ?? "",
+    });
+    setFormOpen(true);
+  };
+
+  const submit = () => {
+    const amount = Number(form.amount);
+    if (!form.partyId) {
+      toast.error("Select a founder / party.");
+      return;
+    }
+    if (!form.accountId) {
+      toast.error("Select the account this entry belongs to.");
+      return;
+    }
+    if (!(amount > 0)) {
+      toast.error("Enter an amount greater than zero.");
+      return;
+    }
+    const input: NewEntryInput = {
+      date: form.date,
+      sourceType: form.sourceType,
+      accountId: form.accountId,
+      direction: form.category === "owner_investment" ? "in" : "out",
+      amount,
+      category: form.category,
+      partyId: form.partyId,
+      particulars:
+        form.particulars.trim() ||
+        (form.category === "owner_investment" ? "Owner investment" : "Owner withdrawal"),
+      reference: form.reference.trim() || undefined,
+      notes: form.notes.trim() || undefined,
+      ledger: false,
+    };
+    const res = form.id ? store.updateEntry(form.id, input) : store.addEntry(input);
+    if (!res.ok) {
+      toast.error(res.message);
+      return;
+    }
+    toast.success(form.id ? "Capital entry updated" : "Capital entry saved");
+    setFormOpen(false);
+  };
+
+  const confirmVoid = () => {
+    if (!voidTarget) return;
+    store.voidEntry(voidTarget.id, voidReason.trim() || undefined);
+    toast.success("Capital entry voided");
+    setVoidTarget(null);
+    setVoidReason("");
+  };
 
   const buckets = useMemo(
     () => buildCapitalViews(store.transactions, (id) => partyName(store.parties, id)),
@@ -151,7 +274,9 @@ function CapitalTab() {
     () =>
       buckets
         .flatMap((b) => b.rows.map((t) => ({ ...t, bucketLabel: b.label })))
-        .sort((a, b) => (a.date === b.date ? a.code.localeCompare(b.code) : b.date.localeCompare(a.date))),
+        .sort((a, b) =>
+          a.date === b.date ? a.code.localeCompare(b.code) : b.date.localeCompare(a.date),
+        ),
     [buckets],
   );
 
@@ -204,15 +329,21 @@ function CapitalTab() {
               <dl className="mt-3 space-y-1 text-xs">
                 <div className="flex justify-between">
                   <dt className={TONE[b.tone].text}>Invested</dt>
-                  <dd className={cn("num font-semibold", TONE[b.tone].text)}>{formatMoney(b.invested)}</dd>
+                  <dd className={cn("num font-semibold", TONE[b.tone].text)}>
+                    {formatMoney(b.invested)}
+                  </dd>
                 </div>
                 <div className="flex justify-between">
                   <dt className={TONE[b.tone].text}>Withdrawn</dt>
-                  <dd className={cn("num font-semibold", TONE[b.tone].text)}>{formatMoney(b.withdrawn)}</dd>
+                  <dd className={cn("num font-semibold", TONE[b.tone].text)}>
+                    {formatMoney(b.withdrawn)}
+                  </dd>
                 </div>
                 <div className="flex justify-between border-t border-border/50 pt-1">
                   <dt className={cn("font-medium", TONE[b.tone].text)}>Current Balance</dt>
-                  <dd className={cn("num font-bold", TONE[b.tone].text)}>{formatMoney(b.balance)}</dd>
+                  <dd className={cn("num font-bold", TONE[b.tone].text)}>
+                    {formatMoney(b.balance)}
+                  </dd>
                 </div>
               </dl>
             </div>
@@ -229,16 +360,22 @@ function CapitalTab() {
 
       <SectionCard
         title="Capital & Investment Entries"
-        actions={<DownloadMenu build={buildExport} label="Download" />}
+        actions={
+          <div className="flex flex-wrap gap-2">
+            <DownloadMenu build={buildExport} label="Download" />
+            <Button
+              className="h-9 bg-navy text-navy-foreground hover:bg-navy/90"
+              onClick={openAdd}
+            >
+              <Plus className="size-4" /> Add Capital Entry
+            </Button>
+          </div>
+        }
       >
-        <p className="mb-3 text-xs text-muted-foreground">
-          Read-only. These rows come from Bank/Cash entries with category Owner Investment or Owner
-          Drawing — edit or void from the original entry.
-        </p>
         {withBalance.length === 0 ? (
           <EmptyState
             title="No capital transactions yet"
-            hint="Record an Owner Investment or Owner Drawing entry from Bank Ledger or Cash Book."
+            hint="Use Add Capital Entry to record an owner investment or withdrawal here."
           />
         ) : (
           <>
@@ -271,13 +408,6 @@ function CapitalTab() {
                       </td>
                       <td className="max-w-[260px] px-3 py-2 text-muted-foreground">
                         <span className="block break-words">{t.particulars}</span>
-                        <button
-                          type="button"
-                          onClick={() => setSource(t)}
-                          className="mt-0.5 text-xs font-semibold text-navy underline"
-                        >
-                          View source entry
-                        </button>
                       </td>
                       <td className="num whitespace-nowrap px-3 py-2 text-right">
                         {t.category === "owner_investment" ? formatMoney(t.amount) : "—"}
@@ -288,7 +418,27 @@ function CapitalTab() {
                       <td className="num whitespace-nowrap px-3 py-2 text-right font-semibold text-navy">
                         {formatMoney(t.balance)}
                       </td>
-                      <td />
+                      <td className="px-2 py-2">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="size-7">
+                              <MoreVertical className="size-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setSource(t)}>
+                              View details
+                            </DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => openEdit(t)}>Edit</DropdownMenuItem>
+                            <DropdownMenuItem
+                              className="text-destructive"
+                              onClick={() => setVoidTarget(t)}
+                            >
+                              Void
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -303,25 +453,22 @@ function CapitalTab() {
                       <p className="mt-0.5 text-sm font-medium text-navy">
                         {partyName(store.parties, t.partyId)} — {t.bucketLabel}
                       </p>
-                      <p className="mt-0.5 break-words text-xs text-muted-foreground">{t.particulars}</p>
+                      <p className="mt-0.5 break-words text-xs text-muted-foreground">
+                        {t.particulars}
+                      </p>
                       <div className="mt-1">
                         <Chip tone={t.category === "owner_investment" ? "green" : "red"}>
                           {t.category === "owner_investment" ? "Investment" : "Withdrawal"}
                         </Chip>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => setSource(t)}
-                        className="mt-1.5 text-xs font-semibold text-navy underline"
-                      >
-                        View source entry
-                      </button>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-0.5">
                       <span className="num text-sm font-semibold text-foreground">
                         {formatMoney(t.amount)}
                       </span>
-                      <span className="num text-xs text-muted-foreground">Bal {formatMoney(t.balance)}</span>
+                      <span className="num text-xs text-muted-foreground">
+                        Bal {formatMoney(t.balance)}
+                      </span>
                     </div>
                   </div>
                 </li>
@@ -335,10 +482,8 @@ function CapitalTab() {
       <Dialog open={!!source} onOpenChange={(o) => !o && setSource(null)}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle className="text-navy">Source entry</DialogTitle>
-            <DialogDescription>
-              {source?.code} — {source?.sourceType === "bank" ? "Bank Ledger" : "Cash Book"} entry.
-            </DialogDescription>
+            <DialogTitle className="text-navy">Capital entry details</DialogTitle>
+            <DialogDescription>{source?.code}</DialogDescription>
           </DialogHeader>
           {source ? (
             <dl className="space-y-2 text-sm">
@@ -354,13 +499,150 @@ function CapitalTab() {
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-4 border-b border-border pb-1.5">
                   <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">{v}</dd>
+                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">
+                    {v}
+                  </dd>
                 </div>
               ))}
             </dl>
           ) : null}
         </DialogContent>
       </Dialog>
+
+      <ModalShell
+        open={formOpen}
+        onClose={() => setFormOpen(false)}
+        title={form.id ? "Edit Capital Entry" : "Add Capital Entry"}
+        subtitle="Recorded only in Capital & Investment — no Bank or Cash entry is created."
+        width="max-w-[640px]"
+        footer={
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" className="h-9" onClick={() => setFormOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="h-9 bg-navy text-navy-foreground hover:bg-navy/90"
+              onClick={submit}
+            >
+              {form.id ? "Update Entry" : "Save Entry"}
+            </Button>
+          </div>
+        }
+      >
+        <div className="grid gap-3 sm:grid-cols-2">
+          <TextField
+            label="Date"
+            type="date"
+            value={form.date}
+            onChange={(v) => setForm((f) => ({ ...f, date: v }))}
+          />
+          <Field label="Founder / Party">
+            <Select
+              value={form.partyId}
+              onValueChange={(v) => setForm((f) => ({ ...f, partyId: v }))}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Select party" />
+              </SelectTrigger>
+              <SelectContent>
+                {partyOptions.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Type">
+            <Select
+              value={form.category}
+              onValueChange={(v) =>
+                setForm((f) => ({ ...f, category: v as CapitalForm["category"] }))
+              }
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="owner_investment">Owner Investment</SelectItem>
+                <SelectItem value="owner_drawing">Owner Withdrawal</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Amount (₹)"><MoneyInput value={toNum(form.amount)} onChange={(n) => setForm((f) => ({ ...f, amount: String(n) }))} /></Field>
+          <Field label="Account type">
+            <Select
+              value={form.sourceType}
+              onValueChange={(v) =>
+                setForm((f) => ({ ...f, sourceType: v as SourceType, accountId: "" }))
+              }
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="bank">Bank</SelectItem>
+                <SelectItem value="cash">Cash</SelectItem>
+              </SelectContent>
+            </Select>
+          </Field>
+          <Field label="Account" hint="For reference only — the ledger is not affected.">
+            <Select
+              value={form.accountId}
+              onValueChange={(v) => setForm((f) => ({ ...f, accountId: v }))}
+            >
+              <SelectTrigger className="h-9">
+                <SelectValue placeholder="Select account" />
+              </SelectTrigger>
+              <SelectContent>
+                {accounts.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </Field>
+          <TextField
+            label="Particulars"
+            className="sm:col-span-2"
+            value={form.particulars}
+            onChange={(v) => setForm((f) => ({ ...f, particulars: v }))}
+          />
+          <TextField
+            label="Reference"
+            value={form.reference}
+            onChange={(v) => setForm((f) => ({ ...f, reference: v }))}
+          />
+          <Field label="Notes" className="sm:col-span-2">
+            <Textarea
+              rows={2}
+              value={form.notes}
+              onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
+            />
+          </Field>
+        </div>
+      </ModalShell>
+
+      <AlertDialog open={!!voidTarget} onOpenChange={(o) => !o && setVoidTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Void this capital entry?</AlertDialogTitle>
+            <AlertDialogDescription>
+              The entry stays in the audit trail but stops affecting capital balances.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <Input
+            placeholder="Reason (optional)"
+            value={voidReason}
+            onChange={(e) => setVoidReason(e.target.value)}
+          />
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmVoid}>Void entry</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -434,25 +716,6 @@ function LiabilitiesTab() {
     items: views.filter((v) => v.liability.kind === k.id),
   })).filter((g) => g.items.length > 0);
 
-  const linkedTxIds = useMemo(
-    () =>
-      new Set(
-        store.liabilityEntries.filter((e) => !e.voided && e.sourceTxId).map((e) => e.sourceTxId as string),
-      ),
-    [store.liabilityEntries],
-  );
-
-  const suggested = useMemo(
-    () =>
-      store.transactions.filter(
-        (t) =>
-          !t.voided &&
-          (t.category === "loan_emi" || t.category === "interest") &&
-          t.direction === "out" &&
-          !linkedTxIds.has(t.id),
-      ),
-    [store.transactions, linkedTxIds],
-  );
 
   const allRows = useMemo(() => {
     const rows: (LiabilityEntry & { balance: number; paid: number; liabName: string })[] = [];
@@ -462,8 +725,12 @@ function LiabilitiesTab() {
       }
     }
     return rows
-      .filter((r) => (filterId === "all" || r.liabilityId === filterId) && r.date >= from && r.date <= to)
-      .sort((a, b) => (a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : b.date.localeCompare(a.date)));
+      .filter(
+        (r) => (filterId === "all" || r.liabilityId === filterId) && r.date >= from && r.date <= to,
+      )
+      .sort((a, b) =>
+        a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : b.date.localeCompare(a.date),
+      );
   }, [views, filterId, from, to]);
 
   const paged = usePaged(allRows, 25);
@@ -493,33 +760,13 @@ function LiabilitiesTab() {
     })),
   });
 
-  const importSuggested = (t: Transaction) => {
-    const liabilityId = filterId !== "all" ? filterId : views[0]?.liability.id;
-    if (!liabilityId) {
-      toast.error("Add a liability first before importing this transaction.");
-      return;
-    }
-    const rec = store.stamp("liabent", {
-      liabilityId,
-      date: t.date,
-      type: (t.category === "interest" ? "interest_paid" : "principal_repaid") as LiabilityEntry["type"],
-      particulars: t.particulars,
-      principal: t.category === "interest" ? 0 : t.amount,
-      interest: t.category === "interest" ? t.amount : 0,
-      paidFrom: t.accountId,
-      sourceModule: t.sourceType === "bank" ? "Bank Entry" : "Cash Entry",
-      sourceTxId: t.id,
-      voided: false,
-    });
-    store.saveRecord("liabilityEntries", rec);
-    toast.success("Transaction imported into liability ledger.");
-  };
 
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-        Note: borrowed money is not income, principal repayment is not an expense — only interest and
-        eligible charges affect P&amp;L. Credit-card purchases keep their actual expense category.
+        Note: borrowed money is not income, principal repayment is not an expense — only interest
+        and eligible charges affect P&amp;L. Credit-card purchases keep their actual expense
+        category.
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -546,26 +793,6 @@ function LiabilitiesTab() {
         </div>
       </div>
 
-      {suggested.length > 0 ? (
-        <SectionCard title="Suggested from Bank/Cash Entries">
-          <ul className="divide-y divide-border">
-            {suggested.map((t) => (
-              <li key={t.id} className="flex flex-wrap items-center justify-between gap-2 py-2 text-sm">
-                <div className="min-w-0">
-                  <p className="font-medium text-navy">{formatMoney(t.amount)} — {t.particulars}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {formatDate(t.date)} · {t.category === "interest" ? "Interest" : "Loan EMI"} ·{" "}
-                    {t.sourceType === "bank" ? "Bank" : "Cash"} entry {t.code}
-                  </p>
-                </div>
-                <Button size="sm" variant="outline" onClick={() => importSuggested(t)}>
-                  Import
-                </Button>
-              </li>
-            ))}
-          </ul>
-        </SectionCard>
-      ) : null}
 
       {grouped.length === 0 ? (
         <EmptyState
@@ -638,7 +865,10 @@ function LiabilitiesTab() {
                   {paged.slice.map((r) => (
                     <tr
                       key={r.id}
-                      className={cn("border-t border-border align-top", r.voided ? "opacity-50 line-through" : "")}
+                      className={cn(
+                        "border-t border-border align-top",
+                        r.voided ? "opacity-50 line-through" : "",
+                      )}
                     >
                       <td className="whitespace-nowrap px-3 py-2">{formatDate(r.date)}</td>
                       <td className="px-3 py-2">{r.liabName}</td>
@@ -666,14 +896,21 @@ function LiabilitiesTab() {
                       <td className="num whitespace-nowrap px-3 py-2 text-right">
                         {r.interest ? formatMoney(r.interest) : "—"}
                       </td>
-                      <td className="num whitespace-nowrap px-3 py-2 text-right">{formatMoney(r.paid)}</td>
+                      <td className="num whitespace-nowrap px-3 py-2 text-right">
+                        {formatMoney(r.paid)}
+                      </td>
                       <td className="num whitespace-nowrap px-3 py-2 text-right font-semibold text-navy">
                         {formatMoney(r.balance)}
                       </td>
                       <td className="px-2 py-2 text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="icon" className="size-8" aria-label="Row actions">
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="size-8"
+                              aria-label="Row actions"
+                            >
                               <MoreVertical className="size-4" />
                             </Button>
                           </DropdownMenuTrigger>
@@ -700,7 +937,9 @@ function LiabilitiesTab() {
                     <div className="min-w-0">
                       <p className="text-xs text-muted-foreground">{formatDate(r.date)}</p>
                       <p className="mt-0.5 text-sm font-medium text-navy">{r.liabName}</p>
-                      <p className="mt-0.5 break-words text-xs text-muted-foreground">{r.particulars}</p>
+                      <p className="mt-0.5 break-words text-xs text-muted-foreground">
+                        {r.particulars}
+                      </p>
                       <div className="mt-1">
                         <Chip tone="grey">{liabilityTypeLabel(r.type)}</Chip>
                       </div>
@@ -718,10 +957,19 @@ function LiabilitiesTab() {
                       />
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
-                      <span className="num text-sm font-semibold text-foreground">{formatMoney(r.paid)}</span>
-                      <span className="num text-xs text-muted-foreground">Bal {formatMoney(r.balance)}</span>
+                      <span className="num text-sm font-semibold text-foreground">
+                        {formatMoney(r.paid)}
+                      </span>
+                      <span className="num text-xs text-muted-foreground">
+                        Bal {formatMoney(r.balance)}
+                      </span>
                       {!r.voided ? (
-                        <Button variant="ghost" size="sm" className="h-6 px-1 text-xs text-destructive" onClick={() => setVoidingEntry(r)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1 text-xs text-destructive"
+                          onClick={() => setVoidingEntry(r)}
+                        >
                           Void
                         </Button>
                       ) : null}
@@ -823,7 +1071,9 @@ function LiabilitiesTab() {
               ].map(([k, v]) => (
                 <div key={k} className="flex justify-between gap-4 border-b border-border pb-1.5">
                   <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">{v}</dd>
+                  <dd className="max-w-[60%] break-words text-right font-medium text-foreground">
+                    {v}
+                  </dd>
                 </div>
               ))}
             </dl>
@@ -849,7 +1099,13 @@ function LiabilityCard({
 }) {
   const l = view.liability;
   return (
-    <div className={cn("rounded-xl border border-border p-4", TONE[tone].bg, l.closed ? "opacity-60" : "")}>
+    <div
+      className={cn(
+        "rounded-xl border border-border p-4",
+        TONE[tone].bg,
+        l.closed ? "opacity-60" : "",
+      )}
+    >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <p className={cn("truncate text-sm font-semibold", TONE[tone].text)}>{l.name}</p>
@@ -938,7 +1194,8 @@ function LiabilityFormModal({
     if (JSON.stringify(next) !== JSON.stringify(form)) setForm(next);
   }
 
-  const set = <K extends keyof LiabForm>(k: K, v: LiabForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof LiabForm>(k: K, v: LiabForm[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
 
   const submit = () => {
     if (!form.name.trim()) {
@@ -986,7 +1243,11 @@ function LiabilityFormModal({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={saving} onClick={submit} className="bg-navy text-navy-foreground hover:bg-navy/90">
+          <Button
+            disabled={saving}
+            onClick={submit}
+            className="bg-navy text-navy-foreground hover:bg-navy/90"
+          >
             {saving ? "Saving…" : "Save"}
           </Button>
         </>
@@ -1009,19 +1270,14 @@ function LiabilityFormModal({
         </Field>
         <TextField label="Name" value={form.name} onChange={(v) => set("name", v)} />
         <TextField label="Lender" value={form.lender} onChange={(v) => set("lender", v)} />
-        <TextField
-          label="Original Amount"
-          type="number"
-          value={form.originalAmount}
-          onChange={(v) => set("originalAmount", v)}
-        />
-        <TextField
-          label="Interest Rate %"
-          type="number"
-          value={form.interestRate}
-          onChange={(v) => set("interestRate", v)}
-        />
-        <TextField label="EMI" type="number" value={form.emi} onChange={(v) => set("emi", v)} />
+        <Field label="Original Amount"><MoneyInput value={toNum(form.originalAmount)} onChange={(n) => set("originalAmount", String(n))} /></Field>
+        <Field label="Interest Rate %"><NumInput decimals={4} value={toNum(form.interestRate)} onChange={(n) => set("interestRate", String(n))} /></Field>
+        <Field label="EMI">
+          <MoneyInput
+            value={toNum(form.emi)}
+            onChange={(n) => set("emi", String(n))}
+          />
+        </Field>
         <TextField
           label="Next Due Date"
           type="date"
@@ -1062,13 +1318,16 @@ function EntryFormModal({
 
   const sources = useMemo(
     () => [
-      ...store.bankAccounts.filter((b) => b.active).map((b) => ({ id: b.id, label: `${b.bankName} — ${b.nickname}` })),
+      ...store.bankAccounts
+        .filter((b) => b.active)
+        .map((b) => ({ id: b.id, label: `${b.bankName} — ${b.nickname}` })),
       ...store.cashLocations.filter((c) => c.active).map((c) => ({ id: c.id, label: c.name })),
     ],
     [store.bankAccounts, store.cashLocations],
   );
 
-  const set = <K extends keyof EntryForm>(k: K, v: EntryForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const set = <K extends keyof EntryForm>(k: K, v: EntryForm[K]) =>
+    setForm((f) => ({ ...f, [k]: v }));
 
   const submit = () => {
     if (!form.liabilityId) {
@@ -1117,7 +1376,11 @@ function EntryFormModal({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={saving} onClick={submit} className="bg-navy text-navy-foreground hover:bg-navy/90">
+          <Button
+            disabled={saving}
+            onClick={submit}
+            className="bg-navy text-navy-foreground hover:bg-navy/90"
+          >
             {saving ? "Saving…" : "Save"}
           </Button>
         </>
@@ -1154,7 +1417,10 @@ function EntryFormModal({
           </Select>
         </Field>
         <Field label="Paid from (optional)">
-          <Select value={form.paidFrom || "none"} onValueChange={(v) => set("paidFrom", v === "none" ? "" : v)}>
+          <Select
+            value={form.paidFrom || "none"}
+            onValueChange={(v) => set("paidFrom", v === "none" ? "" : v)}
+          >
             <SelectTrigger className="h-9 text-sm">
               <SelectValue placeholder="None" />
             </SelectTrigger>
@@ -1168,10 +1434,590 @@ function EntryFormModal({
             </SelectContent>
           </Select>
         </Field>
-        <TextField label="Principal" type="number" value={form.principal} onChange={(v) => set("principal", v)} />
-        <TextField label="Interest" type="number" value={form.interest} onChange={(v) => set("interest", v)} />
+        <Field label="Principal"><MoneyInput value={toNum(form.principal)} onChange={(n) => set("principal", String(n))} /></Field>
+        <Field label="Interest"><MoneyInput value={toNum(form.interest)} onChange={(n) => set("interest", String(n))} /></Field>
         <Field label="Particulars" className="sm:col-span-2">
-          <Input value={form.particulars} onChange={(e) => set("particulars", e.target.value)} className="h-9 text-sm" />
+          <Input
+            value={form.particulars}
+            onChange={(e) => set("particulars", e.target.value)}
+            className="h-9 text-sm"
+          />
+        </Field>
+      </div>
+    </ModalShell>
+  );
+}
+
+/* ================= EMI Tracker ================= */
+
+interface EmiForm {
+  id: string | null;
+  name: string;
+  amount: string;
+  dueDay: string;
+  paidFromType: SourceType;
+  paidFromId: string;
+  startDate: string;
+  endMode: "date" | "count";
+  endDate: string;
+  installments: string;
+  notes: string;
+  closed: boolean;
+}
+
+const emptyEmiForm = (): EmiForm => ({
+  id: null,
+  name: "",
+  amount: "",
+  dueDay: "5",
+  paidFromType: "bank",
+  paidFromId: "",
+  startDate: todayISO(),
+  endMode: "count",
+  endDate: "",
+  installments: "12",
+  notes: "",
+  closed: false,
+});
+
+function EmiTab() {
+  const store = useLepdo();
+  const shell = useShell();
+  const { from, to } = shell;
+  const [formOpen, setFormOpen] = useState(false);
+  const [editing, setEditing] = useState<EmiPlan | null>(null);
+  const [voidingPlan, setVoidingPlan] = useState<EmiPlan | null>(null);
+  const [payTarget, setPayTarget] = useState<{ plan: EmiPlan; month: string; dueDate: string } | null>(
+    null,
+  );
+  const [undoTarget, setUndoTarget] = useState<EmiPayment | null>(null);
+
+  const plans = store.emiPlans;
+  const views = useMemo(
+    () => plans.filter((p) => !p.closed).map((p) => buildEmiSchedule(p, store.emiPayments)),
+    [plans, store.emiPayments],
+  );
+  const closedViews = useMemo(
+    () => plans.filter((p) => p.closed).map((p) => buildEmiSchedule(p, store.emiPayments)),
+    [plans, store.emiPayments],
+  );
+
+  const monthlyOutgo = useMemo(
+    () => plans.filter((p) => !p.closed).reduce((s, p) => s + p.amount, 0),
+    [plans],
+  );
+
+  const paidThisPeriod = useMemo(() => {
+    let total = 0;
+    for (const v of views) {
+      for (const r of v.schedule) {
+        if (r.paid && r.payment && r.payment.date >= from && r.payment.date <= to) {
+          total += r.payment.amount;
+        }
+      }
+    }
+    return total;
+  }, [views, from, to]);
+
+  const overdueCount = useMemo(() => views.reduce((s, v) => s + v.overdueCount, 0), [views]);
+  const remainingCount = useMemo(() => views.reduce((s, v) => s + v.remainingCount, 0), [views]);
+
+  const accountLabel = (type?: SourceType, id?: string) => {
+    if (!type || !id) return "—";
+    if (type === "bank") {
+      const b = store.bankAccounts.find((a) => a.id === id);
+      return b ? `${b.bankName} — ${b.nickname}` : "—";
+    }
+    const c = store.cashLocations.find((a) => a.id === id);
+    return c ? c.name : "—";
+  };
+
+  const markPaid = (amount: string, date: string, notes: string) => {
+    if (!payTarget) return;
+    const amt = Number(amount) || 0;
+    if (amt <= 0) {
+      toast.error("Enter a valid amount.");
+      return;
+    }
+    const rec = store.stamp("emipay", {
+      planId: payTarget.plan.id,
+      month: payTarget.month,
+      date,
+      amount: amt,
+      notes: notes || undefined,
+      voided: false,
+    });
+    store.saveRecord("emiPayments", rec as EmiPayment);
+    toast.success("Instalment marked as paid.");
+    setPayTarget(null);
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          label="Monthly EMI Outgo"
+          value={formatMoney(monthlyOutgo)}
+          hint="Sum of active EMI plans"
+          tone="navy"
+          icon={<Wallet className="size-4" />}
+        />
+        <StatCard
+          label="Paid This Period"
+          value={formatMoney(paidThisPeriod)}
+          hint={`${formatDate(from)} – ${formatDate(to)}`}
+          tone="green"
+          icon={<CheckCircle2 className="size-4" />}
+        />
+        <StatCard
+          label="Overdue Instalments"
+          value={String(overdueCount)}
+          tone={overdueCount > 0 ? "red" : "grey"}
+          icon={<AlertTriangle className="size-4" />}
+        />
+        <StatCard
+          label="Remaining Instalments"
+          value={String(remainingCount)}
+          tone="blue"
+          icon={<CalendarClock className="size-4" />}
+        />
+      </div>
+
+      <div className="flex justify-end">
+        <Button
+          className="h-9 bg-navy text-navy-foreground hover:bg-navy/90"
+          onClick={() => {
+            setEditing(null);
+            setFormOpen(true);
+          }}
+        >
+          <Plus className="size-4" /> Add EMI Plan
+        </Button>
+      </div>
+
+      {views.length === 0 && closedViews.length === 0 ? (
+        <EmptyState
+          title="No EMI plans yet"
+          hint="Add an EMI plan to generate its month-wise payment schedule."
+        />
+      ) : (
+        views.map((v) => (
+          <SectionCard
+            key={v.plan.id}
+            title={v.plan.name}
+            actions={
+              <div className="flex items-center gap-2">
+                <Chip tone="grey">Debit: {accountLabel(v.plan.paidFromType, v.plan.paidFromId)}</Chip>
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button variant="ghost" size="icon" className="size-8" aria-label="EMI actions">
+                      <MoreVertical className="size-4" />
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onClick={() => {
+                        setEditing(v.plan);
+                        setFormOpen(true);
+                      }}
+                    >
+                      Edit EMI
+                    </DropdownMenuItem>
+                    <DropdownMenuItem onClick={() => setVoidingPlan(v.plan)}>
+                      Close EMI
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </div>
+            }
+          >
+            <p className="mb-2 text-xs text-muted-foreground">
+              {formatMoney(v.plan.amount)}/month · Due day {v.plan.dueDay} · Starts{" "}
+              {formatDate(v.plan.startDate)} · Paid {v.paidCount}/{v.schedule.length} · Overdue{" "}
+              {v.overdueCount}
+            </p>
+            <div className="overflow-x-auto">
+              <table className="w-full min-w-[600px] text-sm">
+                <thead className="bg-muted/60 text-xs uppercase tracking-wide text-muted-foreground">
+                  <tr>
+                    <th className="px-3 py-2 text-left font-semibold">Month</th>
+                    <th className="px-3 py-2 text-left font-semibold">Due Date</th>
+                    <th className="px-3 py-2 text-right font-semibold">Amount</th>
+                    <th className="px-3 py-2 text-left font-semibold">Status</th>
+                    <th className="px-2 py-2 text-right font-semibold">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {v.schedule.map((r) => (
+                    <tr key={r.month} className="border-t border-border">
+                      <td className="px-3 py-2">{r.month}</td>
+                      <td className="whitespace-nowrap px-3 py-2">{formatDate(r.dueDate)}</td>
+                      <td className="num whitespace-nowrap px-3 py-2 text-right">
+                        {formatMoney(r.amount)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <Chip
+                          tone={
+                            r.status === "Paid" ? "green" : r.status === "Overdue" ? "red" : "grey"
+                          }
+                        >
+                          {r.status}
+                        </Chip>
+                      </td>
+                      <td className="px-2 py-2 text-right">
+                        {r.paid ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 text-xs text-destructive"
+                            onClick={() => r.payment && setUndoTarget(r.payment)}
+                          >
+                            Undo
+                          </Button>
+                        ) : (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={() =>
+                              setPayTarget({ plan: v.plan, month: r.month, dueDate: r.dueDate })
+                            }
+                          >
+                            Mark Paid
+                          </Button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </SectionCard>
+        ))
+      )}
+
+      {closedViews.length > 0 ? (
+        <SectionCard title="Closed EMI Plans">
+          <ul className="divide-y divide-border text-sm">
+            {closedViews.map((v) => (
+              <li key={v.plan.id} className="flex items-center justify-between gap-2 py-2">
+                <div>
+                  <p className="font-medium text-foreground">{v.plan.name}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatMoney(v.plan.amount)}/month · Paid {v.paidCount}/{v.schedule.length}
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    store.saveRecord("emiPlans", { ...v.plan, closed: false });
+                    toast.success("EMI plan reopened.");
+                  }}
+                >
+                  Reopen
+                </Button>
+              </li>
+            ))}
+          </ul>
+        </SectionCard>
+      ) : null}
+
+      <EmiFormModal open={formOpen} editing={editing} onClose={() => setFormOpen(false)} />
+
+      <AlertDialog open={!!voidingPlan} onOpenChange={(o) => !o && setVoidingPlan(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Close this EMI plan?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {voidingPlan
+                ? `${voidingPlan.name} will move to Closed EMI Plans. It stays visible for audit and can be reopened.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (voidingPlan) {
+                  store.saveRecord("emiPlans", { ...voidingPlan, closed: true });
+                  toast.success("EMI plan closed.");
+                }
+                setVoidingPlan(null);
+              }}
+            >
+              Close EMI
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={!!undoTarget} onOpenChange={(o) => !o && setUndoTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Undo this payment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {undoTarget
+                ? `${formatMoney(undoTarget.amount)} instalment for ${undoTarget.month} will be marked unpaid again.`
+                : ""}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (undoTarget) {
+                  store.setRecordVoided("emiPayments", undoTarget.id, true);
+                  toast.success("Payment undone.");
+                }
+                setUndoTarget(null);
+              }}
+            >
+              Undo Payment
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {payTarget ? (
+        <MarkPaidModal
+          open={!!payTarget}
+          dueDate={payTarget.dueDate}
+          defaultAmount={payTarget.plan.amount}
+          onClose={() => setPayTarget(null)}
+          onConfirm={markPaid}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function MarkPaidModal({
+  open,
+  dueDate,
+  defaultAmount,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean;
+  dueDate: string;
+  defaultAmount: number;
+  onClose: () => void;
+  onConfirm: (amount: string, date: string, notes: string) => void;
+}) {
+  const [amount, setAmount] = useState(String(defaultAmount));
+  const [date, setDate] = useState(todayISO());
+  const [notes, setNotes] = useState("");
+
+  return (
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      title="Mark Instalment as Paid"
+      subtitle={`Due ${formatDate(dueDate)}`}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            className="bg-navy text-navy-foreground hover:bg-navy/90"
+            onClick={() => onConfirm(amount, date, notes)}
+          >
+            Confirm Paid
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <Field label="Amount">
+        <MoneyInput value={toNum(amount)} onChange={(n) => setAmount(String(n))} />
+      </Field>
+        <TextField label="Paid Date" type="date" value={date} onChange={setDate} />
+        <Field label="Notes" className="sm:col-span-2">
+          <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
+        </Field>
+      </div>
+      <p className="mt-2 text-[11px] text-muted-foreground">
+        This only updates the EMI schedule; it does not create a Bank/Cash transaction.
+      </p>
+    </ModalShell>
+  );
+}
+
+function EmiFormModal({
+  open,
+  editing,
+  onClose,
+}: {
+  open: boolean;
+  editing: EmiPlan | null;
+  onClose: () => void;
+}) {
+  const store = useLepdo();
+  const [form, setForm] = useState<EmiForm>(emptyEmiForm());
+  const [saving, setSaving] = useState(false);
+
+  if (open && form.id !== (editing?.id ?? null) && !saving) {
+    const next = editing
+      ? {
+          id: editing.id,
+          name: editing.name,
+          amount: String(editing.amount),
+          dueDay: String(editing.dueDay),
+          paidFromType: editing.paidFromType ?? "bank",
+          paidFromId: editing.paidFromId ?? "",
+          startDate: editing.startDate,
+          endMode: (editing.installments ? "count" : "date") as "date" | "count",
+          endDate: editing.endDate ?? "",
+          installments: editing.installments != null ? String(editing.installments) : "",
+          notes: editing.notes ?? "",
+          closed: !!editing.closed,
+        }
+      : emptyEmiForm();
+    if (JSON.stringify(next) !== JSON.stringify(form)) setForm(next);
+  }
+
+  const set = <K extends keyof EmiForm>(k: K, v: EmiForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+
+  const sources =
+    form.paidFromType === "bank"
+      ? store.bankAccounts.filter((b) => b.active)
+      : store.cashLocations.filter((c) => c.active);
+
+  const submit = () => {
+    if (!form.name.trim()) {
+      toast.error("Enter the EMI name/account.");
+      return;
+    }
+    const amount = Number(form.amount) || 0;
+    if (amount <= 0) {
+      toast.error("Enter the EMI amount.");
+      return;
+    }
+    const dueDay = Number(form.dueDay) || 1;
+    if (dueDay < 1 || dueDay > 31) {
+      toast.error("Due day must be between 1 and 31.");
+      return;
+    }
+    if (!form.paidFromId) {
+      toast.error("Select the debit account.");
+      return;
+    }
+    if (form.endMode === "date" && !form.endDate) {
+      toast.error("Select an end date.");
+      return;
+    }
+    if (form.endMode === "count" && (!Number(form.installments) || Number(form.installments) < 1)) {
+      toast.error("Enter number of instalments.");
+      return;
+    }
+    setSaving(true);
+    try {
+      const rec = store.stamp("emiplan", {
+        id: editing?.id,
+        name: form.name.trim(),
+        amount,
+        dueDay,
+        paidFromType: form.paidFromType,
+        paidFromId: form.paidFromId,
+        startDate: form.startDate,
+        endDate: form.endMode === "date" ? form.endDate : undefined,
+        installments: form.endMode === "count" ? Number(form.installments) : undefined,
+        notes: form.notes || undefined,
+        closed: form.closed,
+      });
+      store.saveRecord("emiPlans", rec as EmiPlan);
+      toast.success(editing ? "EMI plan updated." : "EMI plan added.");
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <ModalShell
+      open={open}
+      onClose={onClose}
+      title={editing ? "Edit EMI Plan" : "Add EMI Plan"}
+      footer={
+        <>
+          <Button variant="outline" onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            disabled={saving}
+            onClick={submit}
+            className="bg-navy text-navy-foreground hover:bg-navy/90"
+          >
+            {saving ? "Saving…" : "Save"}
+          </Button>
+        </>
+      }
+    >
+      <div className="grid gap-3 sm:grid-cols-2">
+        <TextField
+          label="EMI Name / Account"
+          value={form.name}
+          onChange={(v) => set("name", v)}
+          className="sm:col-span-2"
+        />
+        <Field label="Amount">
+          <MoneyInput value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
+        </Field>
+        <Field label="Monthly Due Day (1-31)"><NumInput decimals={0} value={toNum(form.dueDay)} onChange={(n) => set("dueDay", String(n))} /></Field>
+        <Field label="Debit Account Type">
+          <Select
+            value={form.paidFromType}
+            onValueChange={(v) => set("paidFromType", v as SourceType)}
+          >
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bank">Bank</SelectItem>
+              <SelectItem value="cash">Cash</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        <Field label="Debit Account">
+          <Select value={form.paidFromId} onValueChange={(v) => set("paidFromId", v)}>
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue placeholder="Select account" />
+            </SelectTrigger>
+            <SelectContent>
+              {sources.map((s) => (
+                <SelectItem key={s.id} value={s.id}>
+                  {"bankName" in s ? `${s.bankName} — ${s.nickname}` : s.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
+        <TextField
+          label="Start Date"
+          type="date"
+          value={form.startDate}
+          onChange={(v) => set("startDate", v)}
+        />
+        <Field label="End By">
+          <Select value={form.endMode} onValueChange={(v) => set("endMode", v as "date" | "count")}>
+            <SelectTrigger className="h-9 text-sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="count">Instalment Count</SelectItem>
+              <SelectItem value="date">End Date</SelectItem>
+            </SelectContent>
+          </Select>
+        </Field>
+        {form.endMode === "count" ? (
+          <Field label="Number of Instalments"><NumInput decimals={0} value={toNum(form.installments)} onChange={(n) => set("installments", String(n))} /></Field>
+        ) : (
+          <TextField label="End Date" type="date" value={form.endDate} onChange={(v) => set("endDate", v)} />
+        )}
+        <Field label="Notes" className="sm:col-span-2">
+          <Textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={2} />
         </Field>
       </div>
     </ModalShell>

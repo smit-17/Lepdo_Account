@@ -1,3 +1,4 @@
+import { isLedgerEntry, isPosted } from "./entry";
 import { CASH_BOOKS } from "./cash";
 import { round2 } from "./format";
 import type { BankAccount, CashLocation, CategoryId, Party, Transaction } from "./types";
@@ -110,7 +111,9 @@ export function buildPersonLedgers(
   to: string,
 ): PersonLedger[] {
   const all = transactions
-    .filter((t) => !t.voided && isUchhina(t.category) && t.partyId && t.date <= to)
+    .filter(
+      (t) => !t.voided && isUchhina(t.category) && t.partyId && t.date <= to && !isLedgerEntry(t),
+    )
     .sort(sortAsc);
 
   const byPerson = new Map<string, Transaction[]>();
@@ -134,25 +137,31 @@ export function buildPersonLedgers(
     let periodReturned = 0;
     const rows: UchhinaRow[] = [];
     for (const t of list) {
-      if (t.category === UCHHINA_GIVEN) {
-        receivable = round2(receivable + t.amount);
-        given = round2(given + t.amount);
-      } else if (t.category === UCHHINA_RECEIVED_BACK) {
-        receivable = round2(receivable - t.amount);
-        receivedBack = round2(receivedBack + t.amount);
-      } else if (t.category === UCHHINA_TAKEN) {
-        payable = round2(payable + t.amount);
-        taken = round2(taken + t.amount);
-      } else {
-        payable = round2(payable - t.amount);
-        returned = round2(returned + t.amount);
+      // pending / rejected classifications stay visible but never move balances
+      const posted = isPosted(t);
+      if (posted) {
+        if (t.category === UCHHINA_GIVEN) {
+          receivable = round2(receivable + t.amount);
+          given = round2(given + t.amount);
+        } else if (t.category === UCHHINA_RECEIVED_BACK) {
+          receivable = round2(receivable - t.amount);
+          receivedBack = round2(receivedBack + t.amount);
+        } else if (t.category === UCHHINA_TAKEN) {
+          payable = round2(payable + t.amount);
+          taken = round2(taken + t.amount);
+        } else {
+          payable = round2(payable - t.amount);
+          returned = round2(returned + t.amount);
+        }
       }
       if (t.date >= from && t.date <= to) {
-        if (t.category === UCHHINA_GIVEN) periodGiven = round2(periodGiven + t.amount);
-        else if (t.category === UCHHINA_RECEIVED_BACK)
-          periodReceivedBack = round2(periodReceivedBack + t.amount);
-        else if (t.category === UCHHINA_TAKEN) periodTaken = round2(periodTaken + t.amount);
-        else periodReturned = round2(periodReturned + t.amount);
+        if (posted) {
+          if (t.category === UCHHINA_GIVEN) periodGiven = round2(periodGiven + t.amount);
+          else if (t.category === UCHHINA_RECEIVED_BACK)
+            periodReceivedBack = round2(periodReceivedBack + t.amount);
+          else if (t.category === UCHHINA_TAKEN) periodTaken = round2(periodTaken + t.amount);
+          else periodReturned = round2(periodReturned + t.amount);
+        }
         rows.push({
           id: t.id,
           code: t.code,
@@ -186,8 +195,6 @@ export function buildPersonLedgers(
   }
 
   return ledgers.sort(
-    (a, b) =>
-      Math.abs(b.netBalance) - Math.abs(a.netBalance) ||
-      a.name.localeCompare(b.name),
+    (a, b) => Math.abs(b.netBalance) - Math.abs(a.netBalance) || a.name.localeCompare(b.name),
   );
 }

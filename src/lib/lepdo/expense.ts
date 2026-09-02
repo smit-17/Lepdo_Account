@@ -25,9 +25,7 @@ export const EXPENSE_CATEGORIES: ExpenseCategoryMeta[] = [
 export const DEFAULT_EXPENSE_CATEGORY = "Miscellaneous";
 
 export function expenseBadge(label: string | undefined): string {
-  return (
-    EXPENSE_CATEGORIES.find((c) => c.label === label)?.badge ?? "bg-pl-grey text-navy"
-  );
+  return EXPENSE_CATEGORIES.find((c) => c.label === label)?.badge ?? "bg-pl-grey text-navy";
 }
 
 export function expenseHead(label: string | undefined | null): string {

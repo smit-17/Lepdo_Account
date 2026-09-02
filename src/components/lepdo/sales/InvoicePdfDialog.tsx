@@ -1,15 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Download, FileText, Pencil, Printer, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 import { useLepdo } from "@/lib/lepdo/store";
-import { buildInvoiceDocHtml, invoiceTitle, printInvoiceDoc, validateInvoice } from "@/lib/lepdo/invoiceDoc";
+import {
+  buildInvoiceDocHtml,
+  invoiceTitle,
+  printInvoiceDoc,
+  validateInvoice,
+} from "@/lib/lepdo/invoiceDoc";
 import type { Invoice, Party } from "@/lib/lepdo/types";
 
 const A4_WIDTH = 794; // 210mm at 96dpi
 const A4_HEIGHT = 1123; // 297mm at 96dpi
-
 
 export function InvoicePdfDialog({
   invoice,
@@ -29,12 +39,15 @@ export function InvoicePdfDialog({
   const [scale, setScale] = useState(1);
   const [docHeight, setDocHeight] = useState(A4_HEIGHT);
 
-
   const html = useMemo(
-    () => (invoice ? buildInvoiceDocHtml({ invoice, customer, settings: store.settings, received }) : ""),
+    () =>
+      invoice ? buildInvoiceDocHtml({ invoice, customer, settings: store.settings, received }) : "",
     [invoice, customer, store.settings, received],
   );
-  const errors = useMemo(() => (invoice ? validateInvoice(invoice, received) : []), [invoice, received]);
+  const errors = useMemo(
+    () => (invoice ? validateInvoice(invoice, received) : []),
+    [invoice, received],
+  );
 
   useEffect(() => {
     if (!invoice) return;
@@ -84,7 +97,10 @@ export function InvoicePdfDialog({
           </div>
         ) : null}
 
-        <div ref={wrapRef} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-muted/40 p-3">
+        <div
+          ref={wrapRef}
+          className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden bg-muted/40 p-3"
+        >
           {invoice ? (
             <div className="mx-auto" style={{ width: A4_WIDTH * scale, height: docHeight * scale }}>
               <iframe
@@ -103,10 +119,8 @@ export function InvoicePdfDialog({
                 className="rounded-lg border border-border bg-white shadow-sm"
               />
             </div>
-
           ) : null}
         </div>
-
 
         <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-card px-5 py-4">
           {invoice && onEdit ? (
