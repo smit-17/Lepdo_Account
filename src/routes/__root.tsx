@@ -15,6 +15,8 @@ import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/lepdo/AppShell";
 import { LepdoProvider } from "@/lib/lepdo/store";
 
+
+
 function NotFoundComponent() {
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -135,8 +137,9 @@ function RootComponent() {
           {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
           <Outlet />
         </AppShell>
-        <Toaster richColors position="top-right" />
       </LepdoProvider>
+
+      <Toaster richColors position="top-right" />
     </QueryClientProvider>
   );
 }

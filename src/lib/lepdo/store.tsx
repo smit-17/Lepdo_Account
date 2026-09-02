@@ -14,6 +14,8 @@ import { categoryMap } from "./constants";
 import { DEFAULT_SETTINGS } from "./extras";
 import { mergeMasters } from "./masters";
 import { isLedgerEntry } from "./entry";
+import { loadWorkspace, saveWorkspace } from "@/lib/lepdo/workspace.functions";
+
 
 import type {
   Allocation,
@@ -224,41 +226,55 @@ interface StoreValue extends LepdoData {
 const g = globalThis as unknown as { __lepdoStoreCtx?: Context<StoreValue | null> };
 const StoreContext = (g.__lepdoStoreCtx ??= createContext<StoreValue | null>(null));
 
+function hydrate(parsed: Partial<LepdoData> | null | undefined): LepdoData {
+  const seed = buildSeed();
+  if (!parsed || Object.keys(parsed).length === 0) return seed;
+  return {
+    ...seed,
+    ...parsed,
+    brokers: parsed.brokers ?? [],
+    sellers: parsed.sellers ?? [],
+    liabilities: parsed.liabilities ?? [],
+    liabilityEntries: parsed.liabilityEntries ?? [],
+    stockEntries: parsed.stockEntries ?? [],
+    teamMembers: parsed.teamMembers ?? [],
+    teamPayments: parsed.teamPayments ?? [],
+    goals: parsed.goals ?? [],
+    emiPlans: parsed.emiPlans ?? [],
+    emiPayments: parsed.emiPayments ?? [],
+    masters: mergeMasters(parsed.masters),
+
+    settings: {
+      ...DEFAULT_SETTINGS,
+      ...(parsed.settings ?? {}),
+      business: { ...DEFAULT_SETTINGS.business, ...(parsed.settings?.business ?? {}) },
+      branding: { ...DEFAULT_SETTINGS.branding, ...(parsed.settings?.branding ?? {}) },
+      invoice: { ...DEFAULT_SETTINGS.invoice, ...(parsed.settings?.invoice ?? {}) },
+      rules: { ...DEFAULT_SETTINGS.rules, ...(parsed.settings?.rules ?? {}) },
+      security: { ...DEFAULT_SETTINGS.security, ...(parsed.settings?.security ?? {}) },
+    },
+  };
+}
+
 function load(): LepdoData {
   if (typeof window === "undefined") return buildSeed();
   try {
     const raw = window.localStorage.getItem(STORAGE_KEY);
     if (!raw) return buildSeed();
-    const parsed = JSON.parse(raw) as Partial<LepdoData>;
-    const seed = buildSeed();
-    return {
-      ...seed,
-      ...parsed,
-      brokers: parsed.brokers ?? [],
-      sellers: parsed.sellers ?? [],
-      liabilities: parsed.liabilities ?? [],
-      liabilityEntries: parsed.liabilityEntries ?? [],
-      stockEntries: parsed.stockEntries ?? [],
-      teamMembers: parsed.teamMembers ?? [],
-      teamPayments: parsed.teamPayments ?? [],
-      goals: parsed.goals ?? [],
-      emiPlans: parsed.emiPlans ?? [],
-      emiPayments: parsed.emiPayments ?? [],
-      masters: mergeMasters(parsed.masters),
-
-      settings: {
-        ...DEFAULT_SETTINGS,
-        ...(parsed.settings ?? {}),
-        business: { ...DEFAULT_SETTINGS.business, ...(parsed.settings?.business ?? {}) },
-        branding: { ...DEFAULT_SETTINGS.branding, ...(parsed.settings?.branding ?? {}) },
-        invoice: { ...DEFAULT_SETTINGS.invoice, ...(parsed.settings?.invoice ?? {}) },
-        rules: { ...DEFAULT_SETTINGS.rules, ...(parsed.settings?.rules ?? {}) },
-        security: { ...DEFAULT_SETTINGS.security, ...(parsed.settings?.security ?? {}) },
-      },
-    };
+    return hydrate(JSON.parse(raw) as Partial<LepdoData>);
   } catch {
     return buildSeed();
   }
+}
+
+/** true when the snapshot still looks like an untouched empty workspace */
+function isEmptyData(d: LepdoData): boolean {
+  return (
+    d.transactions.length === 0 &&
+    d.salesInvoices.length === 0 &&
+    d.purchaseBills.length === 0 &&
+    d.parties.length === 0
+  );
 }
 
 let counter = 2000;
@@ -267,20 +283,46 @@ function nextCode(): string {
   return `TXN-${counter}`;
 }
 
-export function LepdoProvider({ children }: { children: ReactNode }) {
+export function LepdoProvider({ children }: { children: ReactNode; userId?: string }) {
   const [data, setData] = useState<LepdoData>(() => buildSeed());
   const [ready, setReady] = useState(false);
 
+  // Load: prefer the shared cloud copy; fall back to whatever this browser cached.
   useEffect(() => {
-    const loaded = load();
-    counter = Math.max(
-      2000,
-      ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
-    );
-    setData(loaded);
-    setReady(true);
+    let cancelled = false;
+    const apply = (loaded: LepdoData) => {
+      if (cancelled) return;
+      counter = Math.max(
+        2000,
+        ...loaded.transactions.map((t) => Number(t.code.replace("TXN-", "")) || 0),
+      );
+      setData(loaded);
+      setReady(true);
+    };
+
+    const local = load();
+
+    void (async () => {
+      try {
+        const { json } = await loadWorkspace();
+        const remote = json ? (JSON.parse(json) as Partial<LepdoData>) : null;
+        const hasRemote = !!remote && Object.keys(remote).length > 0;
+        const next = hasRemote ? hydrate(remote) : local;
+        if (!hasRemote && !isEmptyData(local)) {
+          await saveWorkspace({ data: { json: JSON.stringify(local) } });
+        }
+        apply(next);
+      } catch {
+        apply(local);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
+  // Save: local cache immediately, shared cloud copy debounced.
   useEffect(() => {
     if (!ready) return;
     try {
@@ -288,7 +330,15 @@ export function LepdoProvider({ children }: { children: ReactNode }) {
     } catch {
       /* storage unavailable */
     }
+    const timer = window.setTimeout(() => {
+      void saveWorkspace({ data: { json: JSON.stringify(data) } }).catch(() => {
+        /* offline: local cache keeps the data */
+      });
+    }, 800);
+    return () => window.clearTimeout(timer);
   }, [data, ready]);
+
+
 
   const log = useCallback(
     (action: string, entity: string, detail: string): AuditEntry => ({
