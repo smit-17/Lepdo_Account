@@ -1,7 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import lepdoLogo from "@/assets/lepdo-logo.png.asset.json";
 import { createFileRoute } from "@tanstack/react-router";
-import { Eye, Mail, Pencil, Plus, RotateCcw, Save, Trash2, Upload, X, Download, ShieldAlert } from "lucide-react";
+import {
+  Eye,
+  Mail,
+  Pencil,
+  Plus,
+  RotateCcw,
+  Save,
+  Trash2,
+  Upload,
+  X,
+  Download,
+  ShieldAlert,
+} from "lucide-react";
 import { emailBackup } from "@/lib/lepdo/emailBackup.functions";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -35,6 +47,10 @@ import { useLepdo } from "@/lib/lepdo/store";
 import { DEFAULT_SETTINGS } from "@/lib/lepdo/extras";
 import { MASTERS } from "@/lib/lepdo/masters";
 import type { AppSettings, AppUser, Contact, MasterValue, UserPermission } from "@/lib/lepdo/types";
+import { UserManagement } from "@/components/lepdo/UserManagement";
+import { resetAccountingData } from "@/lib/auth/adminApi";
+import { useAuth } from "@/lib/auth/auth";
+import { TIMEOUT_OPTIONS } from "@/lib/auth/permissions";
 
 export const Route = createFileRoute("/settings")({
   head: () => ({
@@ -124,8 +140,6 @@ function Settings() {
     if (!dirty) setDraft(store.settings);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [store.settings, dirty]);
-
-
 
   const patch = <K extends keyof AppSettings>(key: K, value: Partial<AppSettings[K]>) => {
     setDraft((prev) => ({ ...prev, [key]: { ...prev[key], ...value } }));
@@ -571,11 +585,7 @@ function ColorField({
           onChange={(e) => onChange(e.target.value)}
           className="h-9 w-9 shrink-0 cursor-pointer rounded-md border border-input bg-background p-0.5"
         />
-        <Input
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          className="h-9 text-sm"
-        />
+        <Input value={value} onChange={(e) => onChange(e.target.value)} className="h-9 text-sm" />
       </div>
     </Field>
   );
@@ -748,7 +758,15 @@ function MasterData() {
 }
 
 /** Generic reusable panel for any list in MASTERS. */
-function MasterListPanel({ masterId, title, hint }: { masterId: string; title: string; hint: string }) {
+function MasterListPanel({
+  masterId,
+  title,
+  hint,
+}: {
+  masterId: string;
+  title: string;
+  hint: string;
+}) {
   const store = useLepdo();
   const [search, setSearch] = useState("");
   const [newName, setNewName] = useState("");
@@ -758,7 +776,9 @@ function MasterListPanel({ masterId, title, hint }: { masterId: string; title: s
   const filtered = items.filter((v) => v.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   const isDuplicate = (name: string, ignoreId?: string) =>
-    items.some((v) => v.id !== ignoreId && v.name.trim().toLowerCase() === name.trim().toLowerCase());
+    items.some(
+      (v) => v.id !== ignoreId && v.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
 
   const add = () => {
     const name = newName.trim();
@@ -890,7 +910,9 @@ function PartyPanel({ type, title }: { type: "customer" | "supplier"; title: str
   const filtered = items.filter((p) => p.name.toLowerCase().includes(search.trim().toLowerCase()));
 
   const isDuplicate = (name: string, ignoreId?: string) =>
-    items.some((p) => p.id !== ignoreId && p.name.trim().toLowerCase() === name.trim().toLowerCase());
+    items.some(
+      (p) => p.id !== ignoreId && p.name.trim().toLowerCase() === name.trim().toLowerCase(),
+    );
 
   const add = () => {
     const name = newName.trim();
@@ -1430,7 +1452,6 @@ interface RestoreEntry {
 // the accounting data itself lives in the database, and downloaded backup files
 // are the durable copy. Nothing is written to browser storage.
 
-
 function Security({
   draft,
   patch,
@@ -1439,11 +1460,11 @@ function Security({
   patch: <K extends keyof AppSettings>(key: K, value: Partial<AppSettings[K]>) => void;
 }) {
   const store = useLepdo();
+  const auth = useAuth();
   const [restoreOpen, setRestoreOpen] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
-  const [userModal, setUserModal] = useState<AppUser | null>(null);
-  const [permModal, setPermModal] = useState<AppUser | null>(null);
-  const [pwdModal, setPwdModal] = useState<AppUser | null>(null);
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [resetting, setResetting] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [restores, setRestores] = useState<RestoreEntry[]>([]);
 
@@ -1451,18 +1472,14 @@ function Security({
   const [auditSearch, setAuditSearch] = useState("");
   const [auditSection, setAuditSection] = useState("all");
 
-  const users = draft.security.users ?? [];
-
-  const upsertUser = (user: AppUser) => {
-    const exists = users.some((u) => u.id === user.id);
-    const nextUsers = exists ? users.map((u) => (u.id === user.id ? user : u)) : [...users, user];
-    patch("security", { users: nextUsers });
-  };
-
   const snapshotData = () => JSON.parse(JSON.stringify(store, replacer)) as unknown;
 
   const runBackup = (auto: boolean) => {
-    const entry: BackupEntry = { id: uid("bkp"), at: new Date().toISOString(), data: snapshotData() };
+    const entry: BackupEntry = {
+      id: uid("bkp"),
+      at: new Date().toISOString(),
+      data: snapshotData(),
+    };
     const next = [entry, ...backups].slice(0, MAX_BACKUPS);
     setBackups(next);
 
@@ -1544,26 +1561,7 @@ function Security({
     }
   };
 
-  // Idle-timeout notice.
-  useEffect(() => {
-    const minutes = draft.security.idleTimeoutMinutes ?? 0;
-    if (!minutes || minutes <= 0) return;
-    let timer: ReturnType<typeof setTimeout>;
-    const reset = () => {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        toast.message("Signed out after inactivity.");
-      }, minutes * 60 * 1000);
-
-    };
-    const events = ["mousemove", "keydown", "click", "scroll", "touchstart"];
-    events.forEach((ev) => window.addEventListener(ev, reset));
-    reset();
-    return () => {
-      clearTimeout(timer);
-      events.forEach((ev) => window.removeEventListener(ev, reset));
-    };
-  }, [draft.security.idleTimeoutMinutes]);
+  // Session timeout is enforced centrally by the sign-in layer (see src/lib/auth/auth.tsx).
 
   const auditEntity = (e: string) => e.split(":")[0] ?? e;
   const sections = Array.from(new Set(store.auditLogs.map((l) => auditEntity(l.entity)))).sort();
@@ -1615,23 +1613,26 @@ function Security({
               />
             </div>
           </Field>
-          <Field label="Password">
-            <Input type="password" placeholder="••••••••" className="h-9 text-sm" />
-          </Field>
-          <Field label="Auto-logout after inactivity (minutes)">
-            <NumInput
-              className="h-9"
-              decimals={0}
-              placeholder="0 = disabled"
-              value={draft.security.idleTimeoutMinutes ?? 0}
-              onChange={(v) => patch("security", { idleTimeoutMinutes: v })}
-            />
+          <Field label="Default session timeout for new users">
+            <select
+              value={draft.security.idleTimeoutMinutes ?? 60}
+              onChange={(e) => patch("security", { idleTimeoutMinutes: Number(e.target.value) })}
+              className="h-9 w-full rounded-md border border-input bg-background px-2 text-sm"
+            >
+              {TIMEOUT_OPTIONS.map((t) => (
+                <option key={t.value} value={t.value}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
           </Field>
         </div>
         <div className="mt-3 flex flex-wrap gap-2">
-          <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
-            Reset to starting dataset
-          </Button>
+          {auth.can("dataset.reset") ? (
+            <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
+              Reset accounting data
+            </Button>
+          ) : null}
         </div>
       </SectionCard>
 
@@ -1706,79 +1707,7 @@ function Security({
         ) : null}
       </SectionCard>
 
-      <SectionCard
-        title="Users"
-        actions={
-          <Button
-            size="sm"
-            onClick={() =>
-              setUserModal({
-                id: uid("user"),
-                name: "",
-                username: "",
-                role: "Staff",
-                active: true,
-                passwordSet: false,
-                permissions: defaultPermissions(),
-              })
-            }
-          >
-            <Plus className="size-4" /> Add user
-          </Button>
-        }
-      >
-        {users.length === 0 ? (
-          <EmptyState title="No users added yet" hint="Add a user to grant page-wise access." />
-        ) : (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[560px]">
-              <TableHeader>
-                <TableRow className="bg-muted/60">
-                  <TableHead>Name</TableHead>
-                  <TableHead>Username</TableHead>
-                  <TableHead>Role</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead className="text-right">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {users.map((u) => (
-                  <TableRow key={u.id}>
-                    <TableCell className="font-medium">{u.name}</TableCell>
-                    <TableCell>{u.username}</TableCell>
-                    <TableCell>{u.role}</TableCell>
-                    <TableCell>
-                      <span className={cn("text-xs", u.active ? "text-sl-paid" : "text-muted-foreground")}>
-                        {u.active ? "Active" : "Inactive"}
-                      </span>
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex flex-wrap justify-end gap-1">
-                        <Button size="sm" variant="ghost" onClick={() => setUserModal(u)}>
-                          <Pencil className="size-3.5" /> Edit
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setPermModal(u)}>
-                          Permissions
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setPwdModal(u)}>
-                          Password
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => upsertUser({ ...u, active: !u.active })}
-                        >
-                          {u.active ? "Deactivate" : "Activate"}
-                        </Button>
-                      </div>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-      </SectionCard>
+      <UserManagement />
 
       <SectionCard
         title="Audit log"
@@ -1800,7 +1729,9 @@ function Security({
                 const [date, time] = formatDateTime(l.at).split(" ", 2);
                 return {
                   date: date ?? "",
-                  time: formatDateTime(l.at).slice(date?.length ?? 0).trim(),
+                  time: formatDateTime(l.at)
+                    .slice(date?.length ?? 0)
+                    .trim(),
                   by: l.by,
                   entity: l.entity,
                   detail: l.detail,
@@ -1878,32 +1809,69 @@ function Security({
 
       <ModalShell
         open={resetOpen}
-        onClose={() => setResetOpen(false)}
-        title="Reset to starting dataset"
-        width="max-w-[460px]"
+        onClose={() => {
+          setResetOpen(false);
+          setResetConfirm("");
+        }}
+        title="Reset accounting data"
+        width="max-w-[480px]"
         footer={
           <>
-            <Button variant="outline" size="sm" onClick={() => setResetOpen(false)}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setResetOpen(false);
+                setResetConfirm("");
+              }}
+            >
               Cancel
             </Button>
             <Button
               variant="destructive"
               size="sm"
-              onClick={() => {
-                store.resetDemoData();
-                setResetOpen(false);
-                toast.success("Data reset to the starting dataset.");
+              disabled={resetConfirm.trim().toUpperCase() !== "RESET" || resetting}
+              onClick={async () => {
+                setResetting(true);
+                try {
+                  await resetAccountingData();
+                  setResetOpen(false);
+                  setResetConfirm("");
+                  toast.success("Accounting data cleared. Users and settings were kept.");
+                  window.location.reload();
+                } catch (error) {
+                  toast.error(
+                    error instanceof Error ? error.message : "The reset could not be completed.",
+                  );
+                } finally {
+                  setResetting(false);
+                }
               }}
             >
-              Reset data
+              {resetting ? "Resetting…" : "Reset data"}
             </Button>
           </>
         }
       >
-        <p className="text-sm text-muted-foreground">
-          Download a backup first. Resetting replaces the working dataset with the starting data and
-          cannot be undone.
-        </p>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            This clears invoices, bills, payments, expenses, bank and cash entries, uchhina,
+            drawings, capital, stock, team records, goals and the activity trail.
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Your users, passwords, roles, permissions, business profile, branding, invoice settings,
+            master lists, bank accounts and cash books are kept. Download a backup first — this
+            cannot be undone.
+          </p>
+          <Field label="Type RESET to confirm">
+            <Input
+              className="h-9"
+              value={resetConfirm}
+              onChange={(e) => setResetConfirm(e.target.value)}
+              placeholder="RESET"
+            />
+          </Field>
+        </div>
       </ModalShell>
 
       <ModalShell
@@ -1938,158 +1906,6 @@ function Security({
           app will reload after restoring. This action cannot be undone — download a fresh backup
           first if unsure.
         </p>
-      </ModalShell>
-
-      <ModalShell
-        open={!!userModal}
-        onClose={() => setUserModal(null)}
-        title={userModal && users.some((u) => u.id === userModal.id) ? "Edit user" : "Add user"}
-        width="max-w-[460px]"
-        footer={
-          userModal ? (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setUserModal(null)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                disabled={!userModal.name.trim() || !userModal.username.trim()}
-                onClick={() => {
-                  upsertUser(userModal);
-                  setUserModal(null);
-                  toast.success("User saved.");
-                }}
-              >
-                Save
-              </Button>
-            </>
-          ) : null
-        }
-      >
-        {userModal ? (
-          <div className="grid grid-cols-1 gap-3">
-            <TextField
-              label="Name"
-              value={userModal.name}
-              onChange={(v) => setUserModal({ ...userModal, name: v })}
-            />
-            <TextField
-              label="Username"
-              value={userModal.username}
-              onChange={(v) => setUserModal({ ...userModal, username: v })}
-            />
-            <TextField
-              label="Role"
-              value={userModal.role}
-              onChange={(v) => setUserModal({ ...userModal, role: v })}
-            />
-          </div>
-        ) : null}
-      </ModalShell>
-
-      <ModalShell
-        open={!!permModal}
-        onClose={() => setPermModal(null)}
-        title={`Permissions — ${permModal?.name ?? ""}`}
-        width="max-w-[820px]"
-        footer={
-          permModal ? (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setPermModal(null)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  upsertUser(permModal);
-                  setPermModal(null);
-                  toast.success("Permissions saved.");
-                }}
-              >
-                Save
-              </Button>
-            </>
-          ) : null
-        }
-      >
-        {permModal ? (
-          <div className="overflow-x-auto">
-            <Table className="min-w-[640px]">
-              <TableHeader>
-                <TableRow className="bg-muted/60">
-                  <TableHead>Page</TableHead>
-                  {PERMISSION_KEYS.map((k) => (
-                    <TableHead key={k} className="text-center capitalize">
-                      {k}
-                    </TableHead>
-                  ))}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {permModal.permissions.map((perm) => (
-                  <TableRow key={perm.page}>
-                    <TableCell className="text-xs font-medium">{perm.page}</TableCell>
-                    {PERMISSION_KEYS.map((k) => (
-                      <TableCell key={k} className="text-center">
-                        <input
-                          type="checkbox"
-                          checked={perm[k]}
-                          onChange={(e) =>
-                            setPermModal({
-                              ...permModal,
-                              permissions: permModal.permissions.map((p) =>
-                                p.page === perm.page ? { ...p, [k]: e.target.checked } : p,
-                              ),
-                            })
-                          }
-                          className="size-4 cursor-pointer"
-                        />
-                      </TableCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        ) : null}
-      </ModalShell>
-
-      <ModalShell
-        open={!!pwdModal}
-        onClose={() => setPwdModal(null)}
-        title={`Change password — ${pwdModal?.name ?? ""}`}
-        width="max-w-[420px]"
-        footer={
-          pwdModal ? (
-            <>
-              <Button variant="outline" size="sm" onClick={() => setPwdModal(null)}>
-                Cancel
-              </Button>
-              <Button
-                size="sm"
-                onClick={() => {
-                  upsertUser({ ...pwdModal, passwordSet: true });
-                  setPwdModal(null);
-                  toast.success("Password updated.");
-                }}
-              >
-                Set password
-              </Button>
-            </>
-          ) : null
-        }
-      >
-        {pwdModal ? (
-          <div className="space-y-2">
-            <Field label="New password">
-              <Input type="password" placeholder="••••••••" className="h-9 text-sm" />
-            </Field>
-            <p className="text-[11px] text-muted-foreground">
-              Passwords are never stored or displayed in plain text — only a "password set" marker
-              is saved.
-            </p>
-          </div>
-        ) : null}
       </ModalShell>
     </div>
   );

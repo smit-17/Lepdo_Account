@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -14,8 +15,8 @@ import { reportLovableError } from "../lib/lovable-error-reporting";
 import { Toaster } from "@/components/ui/sonner";
 import { AppShell } from "@/components/lepdo/AppShell";
 import { LepdoProvider } from "@/lib/lepdo/store";
-
-
+import { AuthProvider } from "@/lib/auth/auth";
+import { AuthGate } from "@/components/lepdo/AuthGate";
 
 function NotFoundComponent() {
   return (
@@ -129,15 +130,25 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const path = useRouterState({ select: (s) => s.location.pathname });
+  const isPublic = path === "/reset-password";
 
   return (
     <QueryClientProvider client={queryClient}>
-      <LepdoProvider>
-        <AppShell>
-          {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
+      <AuthProvider>
+        {isPublic ? (
+          /* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */
           <Outlet />
-        </AppShell>
-      </LepdoProvider>
+        ) : (
+          <AuthGate>
+            <LepdoProvider>
+              <AppShell>
+                <Outlet />
+              </AppShell>
+            </LepdoProvider>
+          </AuthGate>
+        )}
+      </AuthProvider>
 
       <Toaster richColors position="top-right" />
     </QueryClientProvider>

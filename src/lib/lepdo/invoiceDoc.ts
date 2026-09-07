@@ -1,4 +1,4 @@
-import lepdoaccountlogo from "@/assets/lepdoaccountlogo.png";
+import logoAsset from "@/assets/lepdo-logo.png.asset.json";
 import { formatDate, round2 } from "./format";
 import type { AppSettings, Invoice, Party } from "./types";
 
@@ -368,7 +368,7 @@ export function buildInvoiceDocHtml({
   <thead><tr><td>
     <div class="band">
       <div class="in">
-        <img src="${esc(absoluteUrl(lepdoaccountlogo))}" alt="LEPDO" />
+        <img src="${esc(settings.branding.logoDataUrl?.trim() || absoluteUrl(logoAsset.url))}" alt="LEPDO" />
         <div class="meta">
           <div><span class="k">IEC</span> <span class="v">${esc(IEC)}</span></div>
           <div><span class="k">GSTIN</span> <span class="v">${esc(b.gstin || HEAD_GSTIN)}</span></div>
