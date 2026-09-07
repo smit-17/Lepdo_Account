@@ -19,6 +19,7 @@ import { Route as GoalsRouteImport } from './routes/goals'
 import { Route as PlRouteImport } from './routes/pl'
 import { Route as PurchaseRouteImport } from './routes/purchase'
 import { Route as ReportsRouteImport } from './routes/reports'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as SalesRouteImport } from './routes/sales'
 import { Route as SettingsRouteImport } from './routes/settings'
 import { Route as StockRouteImport } from './routes/stock'
@@ -75,6 +76,11 @@ const ReportsRoute = ReportsRouteImport.update({
   path: '/reports',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SalesRoute = SalesRouteImport.update({
   id: '/sales',
   path: '/sales',
@@ -112,6 +118,7 @@ export interface FileRoutesByFullPath {
   '/pl': typeof PlRoute
   '/purchase': typeof PurchaseRoute
   '/reports': typeof ReportsRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/sales': typeof SalesRoute
   '/settings': typeof SettingsRoute
   '/stock': typeof StockRoute
@@ -129,6 +136,7 @@ export interface FileRoutesByTo {
   '/pl': typeof PlRoute
   '/purchase': typeof PurchaseRoute
   '/reports': typeof ReportsRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/sales': typeof SalesRoute
   '/settings': typeof SettingsRoute
   '/stock': typeof StockRoute
@@ -147,6 +155,7 @@ export interface FileRoutesById {
   '/pl': typeof PlRoute
   '/purchase': typeof PurchaseRoute
   '/reports': typeof ReportsRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/sales': typeof SalesRoute
   '/settings': typeof SettingsRoute
   '/stock': typeof StockRoute
@@ -166,6 +175,7 @@ export interface FileRouteTypes {
     | '/pl'
     | '/purchase'
     | '/reports'
+    | '/reset-password'
     | '/sales'
     | '/settings'
     | '/stock'
@@ -183,6 +193,7 @@ export interface FileRouteTypes {
     | '/pl'
     | '/purchase'
     | '/reports'
+    | '/reset-password'
     | '/sales'
     | '/settings'
     | '/stock'
@@ -200,6 +211,7 @@ export interface FileRouteTypes {
     | '/pl'
     | '/purchase'
     | '/reports'
+    | '/reset-password'
     | '/sales'
     | '/settings'
     | '/stock'
@@ -218,6 +230,7 @@ export interface RootRouteChildren {
   PlRoute: typeof PlRoute
   PurchaseRoute: typeof PurchaseRoute
   ReportsRoute: typeof ReportsRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   SalesRoute: typeof SalesRoute
   SettingsRoute: typeof SettingsRoute
   StockRoute: typeof StockRoute
@@ -297,6 +310,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReportsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/sales': {
       id: '/sales'
       path: '/sales'
@@ -346,6 +366,7 @@ const rootRouteChildren: RootRouteChildren = {
   PlRoute: PlRoute,
   PurchaseRoute: PurchaseRoute,
   ReportsRoute: ReportsRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   SalesRoute: SalesRoute,
   SettingsRoute: SettingsRoute,
   StockRoute: StockRoute,

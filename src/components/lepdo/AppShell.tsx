@@ -20,6 +20,7 @@ import {
   Users,
   FileBarChart,
   WalletCards,
+  LogOut,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,12 +40,15 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import lepdoaccountlogo from "@/assets/lepdoaccountlogo.png";
+import logo from "@/assets/lepdo-logo.png.asset.json";
 import { EntryDrawer, type DrawerConfig } from "./EntryDrawer";
 import type { CategoryId } from "@/lib/lepdo/types";
 import { PRESETS, rangeFor, type Preset } from "@/lib/lepdo/period";
 import { todayISO } from "@/lib/lepdo/format";
 import { ShellContext } from "./shell-context";
+import { useAuth } from "@/lib/auth/auth";
+import { pagePermission, roleLabel } from "@/lib/auth/permissions";
+import { AccessDenied } from "./AuthGate";
 export { useShell } from "./shell-context";
 
 const NAV = [
@@ -78,6 +82,7 @@ const QUICK: { label: string; sourceType: "bank" | "cash"; category?: CategoryId
 ];
 
 export function AppShell({ children }: { children: ReactNode }) {
+  const { can, profile, role, signOut } = useAuth();
   const [drawer, setDrawer] = useState<DrawerConfig | null>(null);
   const [search, setSearch] = useState("");
   const today = todayISO();
@@ -103,6 +108,14 @@ export function AppShell({ children }: { children: ReactNode }) {
   );
   const path = useRouterState({ select: (s) => s.location.pathname });
   const current = NAV.find((n) => n.to === path);
+  const visibleNav = NAV.filter((n) => can(pagePermission(n.to)));
+  const allowedHere = can(pagePermission(path));
+  const initials = (profile?.full_name || profile?.email || "LA")
+    .split(/[\s@.]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "")
+    .join("");
 
   return (
     <ShellContext.Provider
@@ -132,7 +145,7 @@ export function AppShell({ children }: { children: ReactNode }) {
           )}
         >
           <div className="flex h-16 items-center justify-between gap-2 border-b border-sidebar-border bg-navy px-4">
-            <img src={lepdoaccountlogo} alt="LEPDO" className="h-7 w-auto object-contain" />
+            <img src={logo.url} alt="LEPDO" className="h-7 w-auto object-contain" />
             <button
               type="button"
               aria-label="Close menu"
@@ -143,7 +156,7 @@ export function AppShell({ children }: { children: ReactNode }) {
             </button>
           </div>
           <nav className="space-y-1 p-3">
-            {NAV.map((item) => {
+            {visibleNav.map((item) => {
               const Icon = item.icon;
               const isActive = path === item.to;
               return (
@@ -251,9 +264,9 @@ export function AppShell({ children }: { children: ReactNode }) {
                     <Button className="h-9" onClick={pageAction.run}>
                       <Plus className="size-4" /> {pageAction.label}
                     </Button>
-                  ) : (
+                  ) : can("accounting.add") ? (
                     <QuickEntryMenu onPick={setDrawer} />
-                  )}
+                  ) : null}
                 </div>
               )}
 
@@ -263,20 +276,34 @@ export function AppShell({ children }: { children: ReactNode }) {
                     variant="outline"
                     className="h-8 px-2.5 text-xs lg:h-9 lg:px-4 lg:text-sm"
                   >
-                    LA
+                    {initials || "LA"}
                   </Button>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuLabel>LEPDO Admin</DropdownMenuLabel>
+                <DropdownMenuContent align="end" className="w-56">
+                  <DropdownMenuLabel className="leading-tight">
+                    <span className="block truncate text-sm">
+                      {profile?.full_name || profile?.email}
+                    </span>
+                    <span className="block truncate text-[11px] font-normal text-muted-foreground">
+                      {roleLabel(role)}
+                    </span>
+                  </DropdownMenuLabel>
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem asChild>
-                    <Link to="/settings">Settings</Link>
+                  {can("settings.view") ? (
+                    <DropdownMenuItem asChild>
+                      <Link to="/settings">Settings</Link>
+                    </DropdownMenuItem>
+                  ) : null}
+                  <DropdownMenuItem onSelect={() => void signOut()}>
+                    <LogOut className="size-4" /> Sign out
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </div>
           </header>
-          <main className="px-3 py-3 lg:px-6 lg:py-6">{children}</main>
+          <main className="px-3 py-3 lg:px-6 lg:py-6">
+            {allowedHere ? children : <AccessDenied what={current?.label ?? "this page"} />}
+          </main>
         </div>
       </div>
       <EntryDrawer config={drawer} onClose={() => setDrawer(null)} />
