@@ -10,6 +10,26 @@
  */
 type Rec = Record<string, unknown>;
 
+const RESET_SCOPED_KEYS = new Set([
+  "bankAccounts",
+  "cashLocations",
+  "parties",
+  "brokers",
+  "sellers",
+  "salesInvoices",
+  "purchaseBills",
+  "transactions",
+  "auditLogs",
+  "liabilities",
+  "liabilityEntries",
+  "stockEntries",
+  "teamMembers",
+  "teamPayments",
+  "goals",
+  "emiPlans",
+  "emiPayments",
+]);
+
 function isIdList(value: unknown): value is Rec[] {
   return (
     Array.isArray(value) &&
@@ -56,12 +76,18 @@ export function mergeThreeWay<T extends Rec>(
   local: Partial<T>,
 ): Partial<T> {
   const out: Rec = { ...remote };
+  const resetOccurred =
+    typeof (remote as Rec)["accountingResetAt"] === "string" &&
+    (remote as Rec)["accountingResetAt"] !== (base as Rec)["accountingResetAt"];
   const keys = new Set([...Object.keys(remote), ...Object.keys(local)]);
   for (const key of keys) {
     const b = (base as Rec)[key];
     const r = (remote as Rec)[key];
     const l = (local as Rec)[key];
     if (l === undefined) continue;
+    // A database reset is authoritative. Never merge accounting records or
+    // balances from a browser snapshot that predates the reset back into it.
+    if (resetOccurred && RESET_SCOPED_KEYS.has(key)) continue;
     if (isIdList(l) && isIdList(r)) {
       const baseIds = new Set(isIdList(b) ? b.map((i) => i["id"] as string) : []);
       const baseById = new Map<string, string>();

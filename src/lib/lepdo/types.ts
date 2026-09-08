@@ -495,6 +495,8 @@ export interface AppSettings {
 }
 
 export interface LepdoData {
+  /** Server-issued reset marker; prevents stale browser snapshots restoring cleared records. */
+  accountingResetAt?: string | undefined;
   bankAccounts: BankAccount[];
   cashLocations: CashLocation[];
   parties: Party[];
