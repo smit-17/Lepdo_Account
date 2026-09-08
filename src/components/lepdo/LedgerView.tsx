@@ -273,7 +273,7 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
               { value: "classified", label: "Classified" },
               { value: "unclassified", label: "Unclassified" },
               { value: "reconciled", label: "Reconciled" },
-              { value: "void", label: "Void" },
+              { value: "deleted", label: "Deleted" },
             ]}
           />
           <div>
@@ -481,10 +481,10 @@ export function LedgerView({ sourceType }: { sourceType: SourceType }) {
       <Dialog open={!!voidTarget} onOpenChange={(o) => !o && setVoidTarget(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle className="text-navy">Void this entry?</DialogTitle>
+            <DialogTitle className="text-navy">Delete this entry?</DialogTitle>
             <DialogDescription>
-              Voided entries stay visible in the audit log but no longer affect balances. Linked
-              transfer entries are voided together.
+              Deleted entries are removed from all balances, reports and totals. Linked transfer
+              entries are deleted together.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

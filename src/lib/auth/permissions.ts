@@ -20,7 +20,7 @@ export const PERMISSIONS: { id: string; label: string; group: string }[] = [
   { id: "accounting.view", label: "View accounting data", group: "Accounting" },
   { id: "accounting.add", label: "Add records", group: "Accounting" },
   { id: "accounting.edit", label: "Edit records", group: "Accounting" },
-  { id: "accounting.delete", label: "Void / delete records", group: "Accounting" },
+  { id: "accounting.delete", label: "Delete records", group: "Accounting" },
   { id: "reports.view", label: "View reports & P&L", group: "Reports" },
   { id: "settings.view", label: "Open Settings", group: "Settings" },
   { id: "settings.edit", label: "Change settings", group: "Settings" },

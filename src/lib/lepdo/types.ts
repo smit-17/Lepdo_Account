@@ -146,7 +146,6 @@ export interface JewelryItem {
   makingRatePerGram?: number | undefined;
 }
 
-
 export interface Invoice {
   id: string;
   number: string;
@@ -295,6 +294,8 @@ export interface Liability {
   nextDueDate?: string | undefined;
   notes?: string | undefined;
   closed?: boolean | undefined;
+  /** deleted records are excluded from every calculation, list and report */
+  voided?: boolean | undefined;
   createdAt: string;
   createdBy: string;
   updatedAt: string;
@@ -559,4 +560,3 @@ export interface MasterValue {
   name: string;
   active: boolean;
 }
-

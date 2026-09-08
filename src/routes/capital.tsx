@@ -1,7 +1,15 @@
 import { useMemo, useState } from "react";
 import { createFileRoute } from "@tanstack/react-router";
 import { toast } from "sonner";
-import { AlertTriangle, CalendarClock, CheckCircle2, Landmark, MoreVertical, Plus, Wallet } from "lucide-react";
+import {
+  AlertTriangle,
+  CalendarClock,
+  CheckCircle2,
+  Landmark,
+  MoreVertical,
+  Plus,
+  Wallet,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -68,7 +76,15 @@ import {
   type Tone,
 } from "@/lib/lepdo/extras";
 import type { ExportTable } from "@/lib/lepdo/exportTable";
-import type { EmiPayment, EmiPlan, Liability, LiabilityEntry, LiabilityKind, SourceType, Transaction } from "@/lib/lepdo/types";
+import type {
+  EmiPayment,
+  EmiPlan,
+  Liability,
+  LiabilityEntry,
+  LiabilityKind,
+  SourceType,
+  Transaction,
+} from "@/lib/lepdo/types";
 
 export const Route = createFileRoute("/capital")({
   head: () => ({
@@ -194,7 +210,7 @@ function CapitalTab() {
     setForm({
       id: t.id,
       date: t.date,
-      partyId: t.partyId ?? (DRAWING_PARTIES[0]?.id ?? ""),
+      partyId: t.partyId ?? DRAWING_PARTIES[0]?.id ?? "",
       category: t.category === "owner_drawing" ? "owner_drawing" : "owner_investment",
       sourceType: t.sourceType,
       accountId: t.accountId,
@@ -247,7 +263,7 @@ function CapitalTab() {
   const confirmVoid = () => {
     if (!voidTarget) return;
     store.voidEntry(voidTarget.id, voidReason.trim() || undefined);
-    toast.success("Capital entry voided");
+    toast.success("Capital entry deleted");
     setVoidTarget(null);
     setVoidReason("");
   };
@@ -363,10 +379,7 @@ function CapitalTab() {
         actions={
           <div className="flex flex-wrap gap-2">
             <DownloadMenu build={buildExport} label="Download" />
-            <Button
-              className="h-9 bg-navy text-navy-foreground hover:bg-navy/90"
-              onClick={openAdd}
-            >
+            <Button className="h-9 bg-navy text-navy-foreground hover:bg-navy/90" onClick={openAdd}>
               <Plus className="size-4" /> Add Capital Entry
             </Button>
           </div>
@@ -434,7 +447,7 @@ function CapitalTab() {
                               className="text-destructive"
                               onClick={() => setVoidTarget(t)}
                             >
-                              Void
+                              Delete
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -520,10 +533,7 @@ function CapitalTab() {
             <Button variant="outline" className="h-9" onClick={() => setFormOpen(false)}>
               Cancel
             </Button>
-            <Button
-              className="h-9 bg-navy text-navy-foreground hover:bg-navy/90"
-              onClick={submit}
-            >
+            <Button className="h-9 bg-navy text-navy-foreground hover:bg-navy/90" onClick={submit}>
               {form.id ? "Update Entry" : "Save Entry"}
             </Button>
           </div>
@@ -569,7 +579,12 @@ function CapitalTab() {
               </SelectContent>
             </Select>
           </Field>
-          <Field label="Amount (₹)"><MoneyInput value={toNum(form.amount)} onChange={(n) => setForm((f) => ({ ...f, amount: String(n) }))} /></Field>
+          <Field label="Amount (₹)">
+            <MoneyInput
+              value={toNum(form.amount)}
+              onChange={(n) => setForm((f) => ({ ...f, amount: String(n) }))}
+            />
+          </Field>
           <Field label="Account type">
             <Select
               value={form.sourceType}
@@ -627,7 +642,7 @@ function CapitalTab() {
       <AlertDialog open={!!voidTarget} onOpenChange={(o) => !o && setVoidTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Void this capital entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this capital entry?</AlertDialogTitle>
             <AlertDialogDescription>
               The entry stays in the audit trail but stops affecting capital balances.
             </AlertDialogDescription>
@@ -639,7 +654,7 @@ function CapitalTab() {
           />
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmVoid}>Void entry</AlertDialogAction>
+            <AlertDialogAction onClick={confirmVoid}>Delete entry</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -705,7 +720,7 @@ function LiabilitiesTab() {
   const [sourceTx, setSourceTx] = useState<Transaction | null>(null);
   const [filterId, setFilterId] = useState<string>("all");
 
-  const liabilities = store.liabilities.filter((l) => !l.closed || true);
+  const liabilities = store.liabilities.filter((l) => !l.voided);
   const views = useMemo(
     () => liabilities.map((l) => buildLiabilityView(l, store.liabilityEntries)),
     [liabilities, store.liabilityEntries],
@@ -716,7 +731,6 @@ function LiabilitiesTab() {
     items: views.filter((v) => v.liability.kind === k.id),
   })).filter((g) => g.items.length > 0);
 
-
   const allRows = useMemo(() => {
     const rows: (LiabilityEntry & { balance: number; paid: number; liabName: string })[] = [];
     for (const v of views) {
@@ -726,7 +740,11 @@ function LiabilitiesTab() {
     }
     return rows
       .filter(
-        (r) => (filterId === "all" || r.liabilityId === filterId) && r.date >= from && r.date <= to,
+        (r) =>
+          !r.voided &&
+          (filterId === "all" || r.liabilityId === filterId) &&
+          r.date >= from &&
+          r.date <= to,
       )
       .sort((a, b) =>
         a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : b.date.localeCompare(a.date),
@@ -760,7 +778,6 @@ function LiabilitiesTab() {
     })),
   });
 
-
   return (
     <div className="space-y-4">
       <div className="rounded-lg border border-border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -792,7 +809,6 @@ function LiabilitiesTab() {
           </Button>
         </div>
       </div>
-
 
       {grouped.length === 0 ? (
         <EmptyState
@@ -920,7 +936,7 @@ function LiabilitiesTab() {
                               disabled={r.voided}
                               onClick={() => setVoidingEntry(r)}
                             >
-                              Void
+                              Delete
                             </DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -970,7 +986,7 @@ function LiabilitiesTab() {
                           className="h-6 px-1 text-xs text-destructive"
                           onClick={() => setVoidingEntry(r)}
                         >
-                          Void
+                          Delete
                         </Button>
                       ) : null}
                     </div>
@@ -1002,7 +1018,7 @@ function LiabilitiesTab() {
       <AlertDialog open={!!voidingLiab} onOpenChange={(o) => !o && setVoidingLiab(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Void this liability?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this liability?</AlertDialogTitle>
             <AlertDialogDescription>
               {voidingLiab
                 ? `${voidingLiab.name} will be marked closed/void and excluded from totals. It stays visible for audit.`
@@ -1015,12 +1031,12 @@ function LiabilitiesTab() {
               onClick={() => {
                 if (voidingLiab) {
                   store.setRecordVoided("liabilities", voidingLiab.id, true);
-                  toast.success("Liability voided.");
+                  toast.success("Liability deleted.");
                 }
                 setVoidingLiab(null);
               }}
             >
-              Void
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1029,7 +1045,7 @@ function LiabilitiesTab() {
       <AlertDialog open={!!voidingEntry} onOpenChange={(o) => !o && setVoidingEntry(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Void this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {voidingEntry
                 ? `${formatMoney(voidingEntry.principal + voidingEntry.interest)} on ${formatDate(voidingEntry.date)} will be excluded from totals.`
@@ -1042,12 +1058,12 @@ function LiabilitiesTab() {
               onClick={() => {
                 if (voidingEntry) {
                   store.setRecordVoided("liabilityEntries", voidingEntry.id, true);
-                  toast.success("Entry voided.");
+                  toast.success("Entry deleted.");
                 }
                 setVoidingEntry(null);
               }}
             >
-              Void
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -1121,7 +1137,7 @@ function LiabilityCard({
             <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
             <DropdownMenuItem onClick={onFilter}>View Ledger</DropdownMenuItem>
             <DropdownMenuItem className="text-destructive" onClick={onVoid}>
-              Void
+              Delete
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
@@ -1270,13 +1286,21 @@ function LiabilityFormModal({
         </Field>
         <TextField label="Name" value={form.name} onChange={(v) => set("name", v)} />
         <TextField label="Lender" value={form.lender} onChange={(v) => set("lender", v)} />
-        <Field label="Original Amount"><MoneyInput value={toNum(form.originalAmount)} onChange={(n) => set("originalAmount", String(n))} /></Field>
-        <Field label="Interest Rate %"><NumInput decimals={4} value={toNum(form.interestRate)} onChange={(n) => set("interestRate", String(n))} /></Field>
-        <Field label="EMI">
+        <Field label="Original Amount">
           <MoneyInput
-            value={toNum(form.emi)}
-            onChange={(n) => set("emi", String(n))}
+            value={toNum(form.originalAmount)}
+            onChange={(n) => set("originalAmount", String(n))}
           />
+        </Field>
+        <Field label="Interest Rate %">
+          <NumInput
+            decimals={4}
+            value={toNum(form.interestRate)}
+            onChange={(n) => set("interestRate", String(n))}
+          />
+        </Field>
+        <Field label="EMI">
+          <MoneyInput value={toNum(form.emi)} onChange={(n) => set("emi", String(n))} />
         </Field>
         <TextField
           label="Next Due Date"
@@ -1434,8 +1458,12 @@ function EntryFormModal({
             </SelectContent>
           </Select>
         </Field>
-        <Field label="Principal"><MoneyInput value={toNum(form.principal)} onChange={(n) => set("principal", String(n))} /></Field>
-        <Field label="Interest"><MoneyInput value={toNum(form.interest)} onChange={(n) => set("interest", String(n))} /></Field>
+        <Field label="Principal">
+          <MoneyInput value={toNum(form.principal)} onChange={(n) => set("principal", String(n))} />
+        </Field>
+        <Field label="Interest">
+          <MoneyInput value={toNum(form.interest)} onChange={(n) => set("interest", String(n))} />
+        </Field>
         <Field label="Particulars" className="sm:col-span-2">
           <Input
             value={form.particulars}
@@ -1487,9 +1515,11 @@ function EmiTab() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<EmiPlan | null>(null);
   const [voidingPlan, setVoidingPlan] = useState<EmiPlan | null>(null);
-  const [payTarget, setPayTarget] = useState<{ plan: EmiPlan; month: string; dueDate: string } | null>(
-    null,
-  );
+  const [payTarget, setPayTarget] = useState<{
+    plan: EmiPlan;
+    month: string;
+    dueDate: string;
+  } | null>(null);
   const [undoTarget, setUndoTarget] = useState<EmiPayment | null>(null);
 
   const plans = store.emiPlans;
@@ -1607,7 +1637,9 @@ function EmiTab() {
             title={v.plan.name}
             actions={
               <div className="flex items-center gap-2">
-                <Chip tone="grey">Debit: {accountLabel(v.plan.paidFromType, v.plan.paidFromId)}</Chip>
+                <Chip tone="grey">
+                  Debit: {accountLabel(v.plan.paidFromType, v.plan.paidFromId)}
+                </Chip>
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon" className="size-8" aria-label="EMI actions">
@@ -1831,8 +1863,8 @@ function MarkPaidModal({
     >
       <div className="grid gap-3 sm:grid-cols-2">
         <Field label="Amount">
-        <MoneyInput value={toNum(amount)} onChange={(n) => setAmount(String(n))} />
-      </Field>
+          <MoneyInput value={toNum(amount)} onChange={(n) => setAmount(String(n))} />
+        </Field>
         <TextField label="Paid Date" type="date" value={date} onChange={setDate} />
         <Field label="Notes" className="sm:col-span-2">
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
@@ -1965,7 +1997,13 @@ function EmiFormModal({
         <Field label="Amount">
           <MoneyInput value={toNum(form.amount)} onChange={(n) => set("amount", String(n))} />
         </Field>
-        <Field label="Monthly Due Day (1-31)"><NumInput decimals={0} value={toNum(form.dueDay)} onChange={(n) => set("dueDay", String(n))} /></Field>
+        <Field label="Monthly Due Day (1-31)">
+          <NumInput
+            decimals={0}
+            value={toNum(form.dueDay)}
+            onChange={(n) => set("dueDay", String(n))}
+          />
+        </Field>
         <Field label="Debit Account Type">
           <Select
             value={form.paidFromType}
@@ -2012,9 +2050,20 @@ function EmiFormModal({
           </Select>
         </Field>
         {form.endMode === "count" ? (
-          <Field label="Number of Instalments"><NumInput decimals={0} value={toNum(form.installments)} onChange={(n) => set("installments", String(n))} /></Field>
+          <Field label="Number of Instalments">
+            <NumInput
+              decimals={0}
+              value={toNum(form.installments)}
+              onChange={(n) => set("installments", String(n))}
+            />
+          </Field>
         ) : (
-          <TextField label="End Date" type="date" value={form.endDate} onChange={(v) => set("endDate", v)} />
+          <TextField
+            label="End Date"
+            type="date"
+            value={form.endDate}
+            onChange={(v) => set("endDate", v)}
+          />
         )}
         <Field label="Notes" className="sm:col-span-2">
           <Textarea value={form.notes} onChange={(e) => set("notes", e.target.value)} rows={2} />

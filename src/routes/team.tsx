@@ -413,7 +413,9 @@ function SellerPerformance() {
                       <td className="num py-2 pr-2 text-right">
                         {inv.incentivePercent != null ? `${inv.incentivePercent}%` : "—"}
                       </td>
-                      <td className="num py-2 pr-2 text-right">{formatMoney(inv.incentiveAmount)}</td>
+                      <td className="num py-2 pr-2 text-right">
+                        {formatMoney(inv.incentiveAmount)}
+                      </td>
                     </tr>
                   ))}
                 </tbody>
@@ -449,8 +451,9 @@ function TeamSalary() {
   if (!store.ready) return <EmptyState title="Loading team data…" />;
 
   const members = store.teamMembers;
+  // Deleted payments are excluded everywhere — they never appear or count.
   const periodPayments = store.teamPayments.filter(
-    (p) => p.date >= shell.from && p.date <= shell.to,
+    (p) => !p.voided && p.date >= shell.from && p.date <= shell.to,
   );
 
   function memberName(id: string) {
@@ -503,7 +506,7 @@ function TeamSalary() {
       const tx = resolveTx(voidTarget.paidFrom);
       if (tx) store.voidEntry(tx.id);
     }
-    toast.success("Payment voided.");
+    toast.success("Payment deleted.");
     setVoidTarget(null);
   }
 
@@ -631,13 +634,13 @@ function TeamSalary() {
                       <td className="py-2 pr-2">{p.paidFrom ?? "—"}</td>
                       <td className="py-2 pr-2">
                         <Chip tone={p.voided ? "grey" : p.paid ? "green" : "red"}>
-                          {p.voided ? "Voided" : p.paid ? "Paid" : "Pending"}
+                          {p.voided ? "Deleted" : p.paid ? "Paid" : "Pending"}
                         </Chip>
                       </td>
                       <td className="py-2 pr-2">
                         {!p.voided ? (
                           <Button variant="outline" size="sm" onClick={() => setVoidTarget(p)}>
-                            Void
+                            Delete
                           </Button>
                         ) : null}
                       </td>
@@ -654,7 +657,7 @@ function TeamSalary() {
                     <div className="mb-1 flex items-center justify-between">
                       <p className="font-semibold">{memberName(p.memberId)}</p>
                       <Chip tone={p.voided ? "grey" : p.paid ? "green" : "red"}>
-                        {p.voided ? "Voided" : p.paid ? "Paid" : "Pending"}
+                        {p.voided ? "Deleted" : p.paid ? "Paid" : "Pending"}
                       </Chip>
                     </div>
                     <Row label="Date" value={p.date} />
@@ -671,7 +674,7 @@ function TeamSalary() {
                         className="mt-2"
                         onClick={() => setVoidTarget(p)}
                       >
-                        Void
+                        Delete
                       </Button>
                     ) : null}
                   </div>
@@ -691,21 +694,22 @@ function TeamSalary() {
         <ModalShell
           open
           onClose={() => setVoidTarget(null)}
-          title="Void payment?"
+          title="Delete payment?"
           footer={
             <>
               <Button variant="outline" onClick={() => setVoidTarget(null)}>
                 Cancel
               </Button>
               <Button variant="destructive" onClick={confirmVoid}>
-                Void payment
+                Delete payment
               </Button>
             </>
           }
         >
           <p className="text-sm text-muted-foreground">
-            This will void the payment{voidTarget.paidFrom ? " and its linked bank/cash entry" : ""}
-            . This action can be reviewed later but excludes it from totals.
+            This will delete the payment
+            {voidTarget.paidFrom ? " and its linked bank/cash entry" : ""}. This action can be
+            reviewed later but excludes it from totals.
           </p>
         </ModalShell>
       ) : null}
@@ -801,7 +805,12 @@ function MemberModal({ member, onClose }: { member: TeamMember | null; onClose: 
           </Select>
         </Field>
         <Field label="Incentive Rate">
-          <NumInput className="h-9" decimals={4} value={incentiveRate} onChange={setIncentiveRate} />
+          <NumInput
+            className="h-9"
+            decimals={4}
+            value={incentiveRate}
+            onChange={setIncentiveRate}
+          />
         </Field>
         <Field label="Active">
           <div className="flex h-9 items-center gap-2">

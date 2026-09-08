@@ -175,6 +175,7 @@ function Settings() {
     <div className="space-y-4">
       <PageHeading title="Settings" breadcrumb="LEPDO Accounting / Settings">
         <div className="flex flex-wrap items-center gap-2">
+          <ResetDatasetAction />
           <Button variant="outline" size="sm" onClick={() => setPreview(true)}>
             <Eye className="size-4" /> Preview
           </Button>
@@ -503,8 +504,8 @@ function Settings() {
               onChange={(v) => patch("rules", { allowEditAfterPayment: v })}
             />
             <ToggleRow
-              label="Void instead of delete"
-              hint="Records are never removed; voided entries stay in the audit trail."
+              label="Keep deleted entries in the activity trail"
+              hint="Deleted entries never affect balances or reports; only the activity trail keeps a note."
               checked={draft.rules.voidInsteadOfDelete}
               onChange={(v) => patch("rules", { voidInsteadOfDelete: v })}
             />
@@ -1462,9 +1463,6 @@ function Security({
   const store = useLepdo();
   const auth = useAuth();
   const [restoreOpen, setRestoreOpen] = useState(false);
-  const [resetOpen, setResetOpen] = useState(false);
-  const [resetConfirm, setResetConfirm] = useState("");
-  const [resetting, setResetting] = useState(false);
   const [backups, setBackups] = useState<BackupEntry[]>([]);
   const [restores, setRestores] = useState<RestoreEntry[]>([]);
 
@@ -1605,7 +1603,7 @@ function Security({
               ))}
             </select>
           </Field>
-          <Field label="Two-person approval for void">
+          <Field label="Two-person approval for delete">
             <div className="flex h-9 items-center">
               <Switch
                 checked={draft.security.twoPersonVoid}
@@ -1626,13 +1624,6 @@ function Security({
               ))}
             </select>
           </Field>
-        </div>
-        <div className="mt-3 flex flex-wrap gap-2">
-          {auth.can("dataset.reset") ? (
-            <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
-              Reset accounting data
-            </Button>
-          ) : null}
         </div>
       </SectionCard>
 
@@ -1716,7 +1707,7 @@ function Security({
             label="Download"
             build={() => ({
               title: "Audit Log",
-              subtitle: "All create, edit, void and restore activity",
+              subtitle: "All create, edit, delete and restore activity",
               columns: [
                 { key: "date", label: "Date" },
                 { key: "time", label: "Time" },
@@ -1808,12 +1799,70 @@ function Security({
       </SectionCard>
 
       <ModalShell
+        open={restoreOpen}
+        onClose={() => {
+          setRestoreOpen(false);
+          setRestoreFile(null);
+        }}
+        title="Restore from backup?"
+        subtitle={restoreFile?.name}
+        width="max-w-[460px]"
+        footer={
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                setRestoreOpen(false);
+                setRestoreFile(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="destructive" size="sm" onClick={confirmRestore}>
+              Confirm & restore
+            </Button>
+          </>
+        }
+      >
+        <p className="text-sm text-muted-foreground">
+          This replaces all current business data with the contents of the uploaded backup file. The
+          app will reload after restoring. This action cannot be undone — download a fresh backup
+          first if unsure.
+        </p>
+      </ModalShell>
+    </div>
+  );
+}
+
+function replacer(_key: string, value: unknown) {
+  return typeof value === "function" ? undefined : value;
+}
+
+export const SETTINGS_DEFAULTS = DEFAULT_SETTINGS;
+
+/**
+ * Reset to Starting Dataset — clears only accounting records. Accounts, roles,
+ * permissions and every settings value are untouched.
+ */
+function ResetDatasetAction() {
+  const auth = useAuth();
+  const [resetOpen, setResetOpen] = useState(false);
+  const [resetConfirm, setResetConfirm] = useState("");
+  const [resetting, setResetting] = useState(false);
+  if (!auth.can("dataset.reset")) return null;
+  return (
+    <>
+      <Button variant="outline" size="sm" onClick={() => setResetOpen(true)}>
+        <RotateCcw className="size-4" /> Reset to Starting Dataset
+      </Button>
+      <ModalShell
         open={resetOpen}
         onClose={() => {
           setResetOpen(false);
           setResetConfirm("");
         }}
-        title="Reset accounting data"
+        title="Reset to Starting Dataset"
         width="max-w-[480px]"
         footer={
           <>
@@ -1873,46 +1922,6 @@ function Security({
           </Field>
         </div>
       </ModalShell>
-
-      <ModalShell
-        open={restoreOpen}
-        onClose={() => {
-          setRestoreOpen(false);
-          setRestoreFile(null);
-        }}
-        title="Restore from backup?"
-        subtitle={restoreFile?.name}
-        width="max-w-[460px]"
-        footer={
-          <>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setRestoreOpen(false);
-                setRestoreFile(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button variant="destructive" size="sm" onClick={confirmRestore}>
-              Confirm & restore
-            </Button>
-          </>
-        }
-      >
-        <p className="text-sm text-muted-foreground">
-          This replaces all current business data with the contents of the uploaded backup file. The
-          app will reload after restoring. This action cannot be undone — download a fresh backup
-          first if unsure.
-        </p>
-      </ModalShell>
-    </div>
+    </>
   );
 }
-
-function replacer(_key: string, value: unknown) {
-  return typeof value === "function" ? undefined : value;
-}
-
-export const SETTINGS_DEFAULTS = DEFAULT_SETTINGS;

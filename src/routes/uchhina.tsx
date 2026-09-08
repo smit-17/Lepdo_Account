@@ -273,7 +273,7 @@ function UchhinaPage() {
       <NetBalanceCard net={totals.net} asOn={to} />
 
       <p className="text-xs text-muted-foreground">
-        Uchhina is recorded manually here — Add, edit or void entries only from this section.
+        Uchhina is recorded manually here — Add, edit or delete entries only from this section.
       </p>
 
       {ledgers.length === 0 ? (
@@ -303,7 +303,7 @@ function UchhinaPage() {
       <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete / void this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleting
                 ? `${uchhinaTypeLabel(deleting.category)} of ${formatMoney(deleting.amount)} on ${formatDate(deleting.date)} will be removed from the books.`
@@ -317,7 +317,7 @@ function UchhinaPage() {
               onClick={() => {
                 if (deleting) store.voidEntry(deleting.id);
                 setDeleting(null);
-                toast.success("Entry voided.");
+                toast.success("Entry deleted.");
               }}
             >
               Delete entry
@@ -625,7 +625,9 @@ function EntriesTable({
                 </div>
               </div>
               <div className="flex shrink-0 flex-col items-end gap-1">
-                <span className={cn("num text-sm font-semibold", typeCls(r.category).split(" ")[1])}>
+                <span
+                  className={cn("num text-sm font-semibold", typeCls(r.category).split(" ")[1])}
+                >
                   {formatMoney(r.amount)}
                 </span>
                 <span className="num text-xs text-muted-foreground">
@@ -634,7 +636,12 @@ function EntriesTable({
               </div>
             </div>
             <div className="mt-2 flex justify-end gap-1.5">
-              <Button size="sm" variant="outline" className="h-7 px-2 text-xs" onClick={() => onEdit(r)}>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => onEdit(r)}
+              >
                 <Pencil className="size-3.5" /> Edit
               </Button>
               <Button
@@ -807,8 +814,7 @@ function UchhinaFormDialog({
               {editing ? "Edit Uchhina Entry" : "Add Uchhina Entry"}
             </DialogTitle>
             <DialogDescription>
-              Uchhina entries are recorded manually here and never pulled from Bank or Cash
-              entries.
+              Uchhina entries are recorded manually here and never pulled from Bank or Cash entries.
             </DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 overflow-y-auto px-5 py-4 sm:grid-cols-2">
@@ -859,7 +865,10 @@ function UchhinaFormDialog({
             </div>
             <div className="space-y-1.5">
               <Label>Transaction Type</Label>
-              <Select value={type ?? ""} onValueChange={(v) => setType(v as UchhinaRow["category"])}>
+              <Select
+                value={type ?? ""}
+                onValueChange={(v) => setType(v as UchhinaRow["category"])}
+              >
                 <SelectTrigger aria-label="Transaction type">
                   <SelectValue />
                 </SelectTrigger>
@@ -874,7 +883,11 @@ function UchhinaFormDialog({
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="uch-amt">Amount (₹)</Label>
-              <MoneyInput id="uch-amt" value={toNum(amount)} onChange={(n) => setAmount(String(n))} />
+              <MoneyInput
+                id="uch-amt"
+                value={toNum(amount)}
+                onChange={(n) => setAmount(String(n))}
+              />
             </div>
             <div className="space-y-1.5 sm:col-span-2">
               <Label htmlFor="uch-part">Particulars</Label>

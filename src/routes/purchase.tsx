@@ -559,7 +559,7 @@ function PurchasePage() {
                   }}
                   onVoid={() => {
                     store.voidPurchaseBill(v.bill.id);
-                    toast.success(`${v.bill.number} voided.`);
+                    toast.success(`${v.bill.number} deleted.`);
                   }}
                 />
               ))}
@@ -779,7 +779,7 @@ function BillRow({
           PDF
         </Button>
         <Button size="sm" variant="ghost" className="text-neg" onClick={onVoid}>
-          Void
+          Delete
         </Button>
       </div>
     </div>

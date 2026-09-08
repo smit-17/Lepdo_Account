@@ -243,12 +243,8 @@ function CashBookPage() {
           <h1 className="hidden text-xl font-semibold tracking-tight text-navy lg:block lg:text-2xl">
             Cash Book
           </h1>
-          <span className="text-xs font-medium text-muted-foreground">
-            {book.name} balance
-          </span>
-          <span className="num text-xl font-semibold text-navy">
-            {formatMoney(currentBalance)}
-          </span>
+          <span className="text-xs font-medium text-muted-foreground">{book.name} balance</span>
+          <span className="num text-xl font-semibold text-navy">{formatMoney(currentBalance)}</span>
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <Select value={preset} onValueChange={(v) => setPreset(v as BankPreset)}>
@@ -534,7 +530,7 @@ function CashBookPage() {
       <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete / void this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleting
                 ? `${formatMoney(deleting.amount)} on ${formatDate(deleting.date)}${deleting.transferGroupId ? " and its matching transfer entry" : ""} will be removed from the books.`
@@ -548,7 +544,7 @@ function CashBookPage() {
               onClick={() => {
                 if (deleting) store.voidEntry(deleting.id);
                 setDeleting(null);
-                toast.success("Entry voided.");
+                toast.success("Entry deleted.");
               }}
             >
               Delete entry
@@ -626,7 +622,10 @@ function CashEntryForm({
             direction: editing.direction,
             category: editing.category ?? "",
             bankId: "",
-            partyName: partyName(store.parties, editing.partyId) === "—" ? "" : partyName(store.parties, editing.partyId),
+            partyName:
+              partyName(store.parties, editing.partyId) === "—"
+                ? ""
+                : partyName(store.parties, editing.partyId),
             particulars: editing.particulars,
             amount: String(editing.amount),
             reference: editing.reference ?? "",
@@ -882,7 +881,9 @@ function CashEntryForm({
                 value={form.partyName}
                 onChange={(v) => set("partyName", v)}
                 options={store.parties
-                  .filter((p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"))
+                  .filter(
+                    (p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"),
+                  )
                   .map((p) => p.name)}
                 placeholder="Select or type a party"
               />

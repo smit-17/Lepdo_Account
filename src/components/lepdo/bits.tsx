@@ -49,8 +49,8 @@ export function CategoryBadge({ id }: { id: CategoryId | null }) {
   );
 }
 
-export function statusOf(t: Transaction): "Void" | "Reconciled" | "Unclassified" | "Classified" {
-  if (t.voided) return "Void";
+export function statusOf(t: Transaction): "Deleted" | "Reconciled" | "Unclassified" | "Classified" {
+  if (t.voided) return "Deleted";
   if (t.reconciled) return "Reconciled";
   if (!t.category) return "Unclassified";
   return "Classified";
@@ -59,7 +59,7 @@ export function statusOf(t: Transaction): "Void" | "Reconciled" | "Unclassified"
 export function StatusBadge({ t }: { t: Transaction }) {
   const status = statusOf(t);
   const map = {
-    Void: "bg-cat-other-bg text-cat-other line-through",
+    Deleted: "bg-cat-other-bg text-cat-other line-through",
     Reconciled: "bg-cat-transfer-bg text-cat-transfer",
     Unclassified: "bg-cat-other-bg text-cat-other",
     Classified: "bg-cat-sale-bg text-cat-sale",

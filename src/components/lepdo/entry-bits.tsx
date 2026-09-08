@@ -10,7 +10,7 @@ import {
 import { formatDateTime } from "@/lib/lepdo/format";
 import type { Transaction } from "@/lib/lepdo/types";
 
-/** Row actions: View details, Edit, Delete / Void. */
+/** Row actions: View details, Edit, Delete. */
 export function EntryRowMenu({
   onView,
   onEdit,
@@ -34,7 +34,7 @@ export function EntryRowMenu({
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem className="text-neg" onClick={onDelete}>
-          <Trash2 className="size-4" /> Delete / Void
+          <Trash2 className="size-4" /> Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

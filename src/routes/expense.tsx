@@ -163,9 +163,7 @@ function ExpensePage() {
   /** every non-void expense recorded in the Expense section (never Bank/Cash ledger entries) */
   const allExpenses = useMemo(
     () =>
-      store.transactions.filter(
-        (t) => t.category === "expense" && !t.voided && !isLedgerEntry(t),
-      ),
+      store.transactions.filter((t) => t.category === "expense" && !t.voided && !isLedgerEntry(t)),
     [store.transactions],
   );
 
@@ -612,7 +610,7 @@ function ExpensePage() {
       <AlertDialog open={!!voiding} onOpenChange={(o) => !o && setVoiding(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete / void this expense?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this expense?</AlertDialogTitle>
             <AlertDialogDescription>
               {voiding
                 ? `${formatMoney(voiding.amount)} on ${formatDate(voiding.date)} will be removed from expense totals. It stays in the audit log.`
@@ -626,7 +624,7 @@ function ExpensePage() {
               onClick={() => {
                 if (voiding) {
                   store.voidEntry(voiding.id);
-                  toast.success("Expense voided.");
+                  toast.success("Expense deleted.");
                 }
                 setVoiding(null);
               }}
@@ -709,7 +707,7 @@ function RowMenu({
         <DropdownMenuItem onClick={onView}>View</DropdownMenuItem>
         <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
         <DropdownMenuItem className="text-neg" onClick={onVoid}>
-          Delete / Void
+          Delete
         </DropdownMenuItem>
       </DropdownMenuContent>
     </DropdownMenu>

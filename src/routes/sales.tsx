@@ -303,8 +303,6 @@ function SalesPage() {
     });
   }, [model.invoices, iFrom, iTo, invFilters, invMin, invMax, invSearch, invSort]);
 
-
-
   function clearInvFilters() {
     setInvFilters({
       customer: "all",
@@ -391,51 +389,51 @@ function SalesPage() {
           />
         </div>
         <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-        <Button
-          className="h-9"
-          onClick={() => {
-            setEditId(null);
-            setFormOpen(true);
-          }}
-        >
-          <Plus className="size-4" /> Add Sale
-        </Button>
-        <Button
-          className="h-9"
-          variant="outline"
-          onClick={() => {
-            setPaymentCustomer(null);
-            setPaymentOpen(true);
-          }}
-        >
-          <Plus className="size-4" /> Add Payment
-        </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="outline" className="col-span-2 h-9 sm:col-span-1">
-              <Download className="size-4" /> Download Report
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-60">
-            <DropdownMenuLabel>Sales summary</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => report("summary", "excel")}>
-              Excel (.xls)
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => report("summary", "pdf")}>PDF</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Invoice register</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => report("register", "excel")}>
-              Excel (.xls)
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => report("register", "pdf")}>PDF</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuLabel>Customer outstanding</DropdownMenuLabel>
-            <DropdownMenuItem onSelect={() => report("outstanding", "excel")}>
-              Excel (.xls)
-            </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => report("outstanding", "pdf")}>PDF</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+          <Button
+            className="h-9"
+            onClick={() => {
+              setEditId(null);
+              setFormOpen(true);
+            }}
+          >
+            <Plus className="size-4" /> Add Sale
+          </Button>
+          <Button
+            className="h-9"
+            variant="outline"
+            onClick={() => {
+              setPaymentCustomer(null);
+              setPaymentOpen(true);
+            }}
+          >
+            <Plus className="size-4" /> Add Payment
+          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" className="col-span-2 h-9 sm:col-span-1">
+                <Download className="size-4" /> Download Report
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-60">
+              <DropdownMenuLabel>Sales summary</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => report("summary", "excel")}>
+                Excel (.xls)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => report("summary", "pdf")}>PDF</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Invoice register</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => report("register", "excel")}>
+                Excel (.xls)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => report("register", "pdf")}>PDF</DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuLabel>Customer outstanding</DropdownMenuLabel>
+              <DropdownMenuItem onSelect={() => report("outstanding", "excel")}>
+                Excel (.xls)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => report("outstanding", "pdf")}>PDF</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </div>
 
@@ -501,7 +499,10 @@ function SalesPage() {
 
           <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
             {saleTypeCards.map((t) => (
-              <div key={t.id} className="min-w-0 rounded-xl border border-border bg-card p-3 shadow-sm">
+              <div
+                key={t.id}
+                className="min-w-0 rounded-xl border border-border bg-card p-3 shadow-sm"
+              >
                 <p className="truncate text-xs font-medium text-muted-foreground">{t.label}</p>
                 <p className="num mt-1 text-sm text-muted-foreground">
                   {t.count} invoice{t.count === 1 ? "" : "s"}
@@ -637,12 +638,12 @@ function SalesPage() {
               onVoid={(v) => {
                 if (
                   !window.confirm(
-                    `Void invoice ${v.invoice.number}? It stays in the audit log but stops affecting balances.`,
+                    `Delete invoice ${v.invoice.number}? It will be removed from all balances, reports and totals.`,
                   )
                 )
                   return;
                 store.voidSalesInvoice(v.invoice.id);
-                toast.success("Invoice voided.");
+                toast.success("Invoice deleted.");
               }}
             />
           </Panel>
@@ -860,11 +861,7 @@ function InvoiceTable({
                 <Button size="sm" variant="ghost" onClick={() => onEdit?.(v.invoice.id)}>
                   Edit
                 </Button>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => onAddPayment?.(v.invoice.partyId)}
-                >
+                <Button size="sm" variant="ghost" onClick={() => onAddPayment?.(v.invoice.partyId)}>
                   Payment
                 </Button>
                 <Button size="sm" variant="ghost" onClick={() => onPreviewPdf?.(v.invoice.id)}>
@@ -876,7 +873,7 @@ function InvoiceTable({
                   className="text-neg hover:bg-neg/10 hover:text-neg"
                   onClick={() => onVoid?.(v)}
                 >
-                  Void
+                  Delete
                 </Button>
               </div>
             ) : null}
@@ -1306,16 +1303,16 @@ function InvoiceDialog({
                 onClick={() => {
                   if (
                     !window.confirm(
-                      `Void invoice ${inv.number}? It stays in the audit log but stops affecting balances.`,
+                      `Delete invoice ${inv.number}? It will be removed from all balances, reports and totals.`,
                     )
                   )
                     return;
                   store.voidSalesInvoice(inv.id);
-                  toast.success("Invoice voided.");
+                  toast.success("Invoice deleted.");
                   onClose();
                 }}
               >
-                Void
+                Delete
               </Button>
             </>
           ) : null}

@@ -562,7 +562,7 @@ function BankLedgerPage() {
       <AlertDialog open={!!deleting} onOpenChange={(o) => !o && setDeleting(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete / void this entry?</AlertDialogTitle>
+            <AlertDialogTitle>Delete this entry?</AlertDialogTitle>
             <AlertDialogDescription>
               {deleting
                 ? `${formatMoney(deleting.amount)} on ${formatDate(deleting.date)}${deleting.transferGroupId ? " and its matching transfer entry" : ""} will be removed from the books.`
@@ -576,7 +576,7 @@ function BankLedgerPage() {
               onClick={() => {
                 if (deleting) store.voidEntry(deleting.id);
                 setDeleting(null);
-                toast.success("Entry voided.");
+                toast.success("Entry deleted.");
               }}
             >
               Delete entry
@@ -618,7 +618,10 @@ function BankEntryForm({
             category: uiCategoryFromCategoryId(editing.category),
             destinationKind: "",
             destinationId: "",
-            partyName: partyName(store.parties, editing.partyId) === "—" ? "" : partyName(store.parties, editing.partyId),
+            partyName:
+              partyName(store.parties, editing.partyId) === "—"
+                ? ""
+                : partyName(store.parties, editing.partyId),
             particulars: editing.particulars,
             amount: String(editing.amount),
             reference: editing.reference ?? "",
@@ -808,10 +811,18 @@ function BankEntryForm({
             {isTransfer ? (
               <Field label="Destination">
                 <Select
-                  value={form.destinationKind && form.destinationId ? `${form.destinationKind}:${form.destinationId}` : ""}
+                  value={
+                    form.destinationKind && form.destinationId
+                      ? `${form.destinationKind}:${form.destinationId}`
+                      : ""
+                  }
                   onValueChange={(v) => {
                     const [kind, id] = v.split(":");
-                    setForm((f) => ({ ...f, destinationKind: kind as "bank" | "cash", destinationId: id ?? "" }));
+                    setForm((f) => ({
+                      ...f,
+                      destinationKind: kind as "bank" | "cash",
+                      destinationId: id ?? "",
+                    }));
                   }}
                 >
                   <SelectTrigger>
@@ -863,7 +874,9 @@ function BankEntryForm({
                 value={form.partyName}
                 onChange={(v) => set("partyName", v)}
                 options={store.parties
-                  .filter((p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"))
+                  .filter(
+                    (p) => p.type === (form.category === "sale_payment" ? "customer" : "supplier"),
+                  )
                   .map((p) => p.name)}
                 placeholder="Select or type a party"
               />
