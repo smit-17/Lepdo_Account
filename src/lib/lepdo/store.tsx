@@ -1131,22 +1131,10 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
         return { ok: false, message: "Bill total must be greater than zero." };
 
       const clash = data.purchaseBills.find(
-        (b) =>
-          b.id !== input.id &&
-          !b.voided &&
-          (b.number.toLowerCase() === number.toLowerCase() ||
-            (b.partyId === input.partyId &&
-              b.date === input.date &&
-              round2(b.total) === round2(input.total))),
+        (b) => b.id !== input.id && !b.voided && b.number.toLowerCase() === number.toLowerCase(),
       );
-      if (clash)
-        return {
-          ok: false,
-          message:
-            clash.number.toLowerCase() === number.toLowerCase()
-              ? `Bill number ${number} already exists.`
-              : `A matching bill (${clash.number}) already exists for this supplier, date and amount.`,
-        };
+      if (clash) return { ok: false, message: `Bill number ${number} already exists.` };
+
 
       const now = new Date().toISOString();
       const id = input.id ?? uid("pb");

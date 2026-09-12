@@ -50,6 +50,8 @@ import {
 import { PurchaseForm } from "@/components/lepdo/purchase/PurchaseForm";
 import { SupplierForm } from "@/components/lepdo/purchase/SupplierForm";
 import { SupplierPaymentForm } from "@/components/lepdo/purchase/SupplierPaymentForm";
+import { AdvanceForm } from "@/components/lepdo/purchase/AdvanceForm";
+import { AdvanceAdjustForm } from "@/components/lepdo/purchase/AdvanceAdjustForm";
 import { Panel, Stat, StatusChip } from "@/components/lepdo/sales/ui";
 
 export const Route = createFileRoute("/purchase")({
@@ -74,12 +76,13 @@ export const Route = createFileRoute("/purchase")({
   component: PurchasePage,
 });
 
-type Tab = "dashboard" | "bills" | "suppliers" | "brokers";
+type Tab = "dashboard" | "bills" | "suppliers" | "advances" | "brokers";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "dashboard", label: "Purchase Dashboard" },
   { id: "bills", label: "Invoice-Wise" },
   { id: "suppliers", label: "Supplier-Wise" },
+  { id: "advances", label: "Advance Payment" },
   { id: "brokers", label: "Broker-Wise" },
 ];
 
@@ -95,6 +98,9 @@ function PurchasePage() {
   const [supplierFormOpen, setSupplierFormOpen] = useState(false);
   const [supplierEditId, setSupplierEditId] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  const [advanceOpen, setAdvanceOpen] = useState(false);
+  const [advanceSupplier, setAdvanceSupplier] = useState<string | null>(null);
+  const [adjustId, setAdjustId] = useState<string | null>(null);
 
   /* ---- Invoice-Wise sort & filter state (kept while records open/close) ---- */
   const today = todayISO();
@@ -670,6 +676,59 @@ function PurchasePage() {
           </Panel>
         </TabsContent>
 
+        {/* advance payment */}
+        <TabsContent value="advances" className="mt-4 space-y-3">
+          <Panel
+            title={`Advance payments (${model.payments.filter((p) => p.advance > 0).length})`}
+            action={
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setAdvanceSupplier(null);
+                  setAdvanceOpen(true);
+                }}
+              >
+                <Plus className="mr-1 h-4 w-4" /> Add Advance
+              </Button>
+            }
+          >
+            <div className="space-y-2">
+              {model.payments
+                .filter((p) => p.advance > 0)
+                .map((p) => (
+                  <div
+                    key={p.id}
+                    className="grid grid-cols-1 gap-2 rounded-lg border border-border p-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-navy">
+                        {store.parties.find((x) => x.id === p.partyId)?.name ?? "Unknown supplier"}
+                      </p>
+                      <p className="num truncate text-[11px] text-muted-foreground">
+                        {formatDate(p.date)} · {p.account} · Ref {p.reference} · Paid{" "}
+                        {formatMoney(p.amount)} · Adjusted {formatMoney(p.allocated)}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2 sm:justify-end">
+                      <span className="num rounded-md bg-sl-advance-bg px-2 py-1 text-xs font-semibold text-sl-advance">
+                        Advance {formatMoney(p.advance)}
+                      </span>
+                      <Button size="sm" variant="outline" onClick={() => setAdjustId(p.id)}>
+                        Adjust to bill
+                      </Button>
+                    </div>
+                  </div>
+                ))}
+              {!model.payments.some((p) => p.advance > 0) ? (
+                <p className="p-3 text-sm text-muted-foreground">
+                  No unadjusted supplier advances.
+                </p>
+              ) : null}
+            </div>
+          </Panel>
+        </TabsContent>
+
         {/* broker-wise */}
         <TabsContent value="brokers" className="mt-4">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -722,6 +781,16 @@ function PurchasePage() {
         open={payOpen}
         presetSupplierId={paySupplier}
         onClose={() => setPayOpen(false)}
+      />
+      <AdvanceForm
+        open={advanceOpen}
+        presetSupplierId={advanceSupplier}
+        onClose={() => setAdvanceOpen(false)}
+      />
+      <AdvanceAdjustForm
+        open={adjustId !== null}
+        paymentId={adjustId}
+        onClose={() => setAdjustId(null)}
       />
     </div>
   );

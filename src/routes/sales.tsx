@@ -70,6 +70,7 @@ import { InvoicePdfDialog } from "@/components/lepdo/sales/InvoicePdfDialog";
 
 import { SaleForm } from "@/components/lepdo/sales/SaleForm";
 import { PaymentForm } from "@/components/lepdo/sales/PaymentForm";
+import { CustomerForm } from "@/components/lepdo/sales/CustomerForm";
 import { FormField, MODAL_CLASS, Panel, Row, Stat, StatusChip } from "@/components/lepdo/sales/ui";
 
 export const Route = createFileRoute("/sales")({
@@ -117,6 +118,7 @@ function SalesPage() {
   const [pdfInvoiceId, setPdfInvoiceId] = useState<string | null>(null);
 
   const [openCustomerId, setOpenCustomerId] = useState<string | null>(null);
+  const [customerFormOpen, setCustomerFormOpen] = useState(false);
   const [group, setGroup] = useState<{ title: string; rows: InvoiceView[] } | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
 
@@ -651,7 +653,14 @@ function SalesPage() {
       ) : null}
 
       {tab === "customers" ? (
-        <Panel title={`Customers (${customers.length})`}>
+        <Panel
+          title={`Customers (${customers.length})`}
+          action={
+            <Button size="sm" variant="outline" onClick={() => setCustomerFormOpen(true)}>
+              <Plus className="mr-1 h-4 w-4" /> Add Customer
+            </Button>
+          }
+        >
           <CustomerTable rows={customers} onOpen={setOpenCustomerId} />
         </Panel>
       ) : null}
@@ -701,6 +710,12 @@ function SalesPage() {
         open={paymentOpen}
         presetCustomerId={paymentCustomer}
         onClose={() => setPaymentOpen(false)}
+      />
+
+      <CustomerForm
+        open={customerFormOpen}
+        customerId={null}
+        onClose={() => setCustomerFormOpen(false)}
       />
 
       <GroupDialog group={group} onClose={() => setGroup(null)} onOpenInvoice={setOpenInvoiceId} />

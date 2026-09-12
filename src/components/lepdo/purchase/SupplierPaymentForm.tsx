@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -42,6 +42,10 @@ export function SupplierPaymentForm({
     notes: "",
   });
   const [alloc, setAlloc] = useState<Record<string, string>>({});
+  // While untouched, allocations follow the amount automatically (oldest bill first).
+  const [allocTouched, setAllocTouched] = useState(false);
+  // "yes" consumes the supplier's advance balance instead of a bank/cash account.
+  const [payFromAdvance, setPayFromAdvance] = useState<"no" | "yes">("yes");
 
   useEffect(() => {
     if (!open) return;
@@ -55,6 +59,8 @@ export function SupplierPaymentForm({
       notes: "",
     });
     setAlloc({});
+    setAllocTouched(false);
+    setPayFromAdvance("yes");
   }, [open, presetSupplierId]);
 
   const suppliers = store.parties.filter((p) => p.type === "supplier" || p.type === "other");
@@ -72,40 +78,147 @@ export function SupplierPaymentForm({
     [store, form.partyId],
   );
 
+  // Supplier advance = unallocated part of their purchase payments, oldest first.
+  const advanceTx = useMemo(
+    () =>
+      store.transactions
+        .filter(
+          (t) =>
+            !t.voided &&
+            t.category === "purchase_payment" &&
+            t.direction === "out" &&
+            t.partyId === form.partyId,
+        )
+        .map((tx) => ({
+          tx,
+          remaining: round2(
+            tx.amount - (tx.allocations ?? []).reduce((s, a) => s + a.amount, 0),
+          ),
+        }))
+        .filter((x) => x.remaining > 0)
+        .sort((a, b) =>
+          a.tx.date === b.tx.date
+            ? a.tx.code.localeCompare(b.tx.code)
+            : a.tx.date.localeCompare(b.tx.date),
+        ),
+    [store.transactions, form.partyId],
+  );
+  const advanceBalance = round2(advanceTx.reduce((s, x) => s + x.remaining, 0));
+
   const amount = round2(Number(form.amount) || 0);
   const allocated = round2(Object.values(alloc).reduce((s, v) => s + (Number(v) || 0), 0));
   const unallocated = round2(Math.max(0, amount - allocated));
 
-  function autoAllocate() {
-    let left = amount;
-    const next: Record<string, string> = {};
-    for (const bill of openBills) {
-      if (left <= 0) break;
-      const due = round2(bill.total - bill.paid);
-      const take = round2(Math.min(due, left));
-      if (take > 0) next[bill.id] = String(take);
-      left = round2(left - take);
+  // Only offer "Pay from advance" when the selected supplier has enough advance
+  // balance to cover the entered amount. Otherwise fall back to a normal payment.
+  const showPayFromAdvance = Boolean(form.partyId) && amount > 0 && advanceBalance >= amount;
+
+  useEffect(() => {
+    if (!showPayFromAdvance && payFromAdvance === "yes") {
+      setPayFromAdvance("no");
     }
-    setAlloc(next);
+  }, [showPayFromAdvance, payFromAdvance]);
+
+  const buildAuto = useCallback(
+    (total: number, bills: typeof openBills) => {
+      let left = total;
+      const next: Record<string, string> = {};
+      for (const bill of bills) {
+        if (left <= 0) break;
+        const due = round2(bill.total - bill.paid);
+        const take = round2(Math.min(due, left));
+        if (take > 0) next[bill.id] = String(take);
+        left = round2(left - take);
+      }
+      return next;
+    },
+    [],
+  );
+
+  // Payments stay as supplier advance by default. Allocation against open bills
+  // happens only when the user enters amounts or clicks "Auto allocate".
+
+  function autoAllocate() {
+    setAllocTouched(false);
+    setAlloc(buildAuto(amount, openBills));
   }
 
   function submit() {
     if (saving) return;
+    const fromAdvance = payFromAdvance === "yes";
     const error = !form.partyId
       ? "Select the supplier."
       : !(amount > 0)
         ? "Amount must be greater than zero."
-        : !form.account
-          ? "Select the bank or cash account."
-          : allocated > amount
-            ? "Allocation cannot exceed the payment amount."
-            : openBills.find((b) => round2(Number(alloc[b.id]) || 0) > round2(b.total - b.paid))
-              ? "An allocation exceeds that bill's pending amount."
-              : null;
+        : fromAdvance && amount > advanceBalance
+          ? `Advance balance is insufficient — only ${formatMoney(advanceBalance)} available.`
+          : !fromAdvance && !form.account
+            ? "Select the bank or cash account."
+            : allocated > amount
+              ? "Allocation cannot exceed the payment amount."
+              : fromAdvance && allocated < amount
+                ? "Allocate the full amount to open bills when paying from advance."
+                : openBills.find((b) => round2(Number(alloc[b.id]) || 0) > round2(b.total - b.paid))
+                  ? "An allocation exceeds that bill's pending amount."
+                  : null;
     if (error) {
       toast.error(error);
       return;
     }
+
+    // Pay from advance: no bank/cash debit — consume the supplier's advance
+    // entries (oldest first) by allocating them to the selected bills.
+    if (fromAdvance) {
+      const needs = openBills
+        .map((b) => ({ id: b.id, amount: round2(Number(alloc[b.id]) || 0) }))
+        .filter((n) => n.amount > 0);
+      setSaving(true);
+      for (const adv of advanceTx) {
+        if (needs.every((n) => n.amount <= 0)) break;
+        let cap = adv.remaining;
+        const merged = new Map(
+          (adv.tx.allocations ?? []).map((a) => [a.invoiceId, round2(a.amount)]),
+        );
+        for (const n of needs) {
+          if (cap <= 0) break;
+          if (n.amount <= 0) continue;
+          const take = round2(Math.min(cap, n.amount));
+          merged.set(n.id, round2((merged.get(n.id) ?? 0) + take));
+          n.amount = round2(n.amount - take);
+          cap = round2(cap - take);
+        }
+        const result = store.updateEntry(
+          adv.tx.id,
+          {
+            date: adv.tx.date,
+            sourceType: adv.tx.sourceType,
+            accountId: adv.tx.accountId,
+            direction: adv.tx.direction,
+            amount: round2(adv.tx.amount),
+            category: adv.tx.category,
+            partyId: adv.tx.partyId,
+            particulars: adv.tx.particulars,
+            reference: adv.tx.reference,
+            paymentMethod: adv.tx.paymentMethod,
+            notes: adv.tx.notes,
+            allocations: [...merged.entries()].map(([invoiceId, amt]) => ({
+              invoiceId,
+              amount: amt,
+            })),
+          },
+          `Advance ${formatMoney(amount)} used for supplier payment`,
+        );
+        if (!result.ok) {
+          toast.error(result.message);
+          setSaving(false);
+          return;
+        }
+      }
+      toast.success(`Payment of ${formatMoney(amount)} made from supplier advance.`);
+      onClose();
+      return;
+    }
+
     const [sourceType, accountId] = form.account.split(":") as ["bank" | "cash", string];
     const entry = {
       date: form.date,
@@ -168,6 +281,7 @@ export function SupplierPaymentForm({
                 onValueChange={(v) => {
                   setForm({ ...form, partyId: v });
                   setAlloc({});
+                  setAllocTouched(false);
                 }}
               >
                 <SelectTrigger>
@@ -182,13 +296,45 @@ export function SupplierPaymentForm({
                 </SelectContent>
               </Select>
             </FormField>
+            {showPayFromAdvance && (
+              <FormField label="Pay from advance">
+                <Select
+                  value={payFromAdvance}
+                  onValueChange={(v) => setPayFromAdvance(v as "no" | "yes")}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="no">No</SelectItem>
+                    <SelectItem value="yes">Yes</SelectItem>
+                  </SelectContent>
+                </Select>
+                {form.partyId && (
+                  <p className="num mt-1 text-[11px] text-muted-foreground">
+                    Available advance: {formatMoney(advanceBalance)}
+                  </p>
+                )}
+              </FormField>
+            )}
             <FormField label="Amount" required>
               <MoneyInput value={toNum(form.amount)} onChange={(n) => setForm({ ...form, amount: String(n) })} />
             </FormField>
-            <FormField label="Bank / cash account" required>
-              <Select value={form.account} onValueChange={(v) => setForm({ ...form, account: v })}>
+            <FormField
+              label={payFromAdvance === "yes" ? "Bank / cash account (not used)" : "Bank / cash account"}
+              required={payFromAdvance !== "yes"}
+            >
+              <Select
+                value={form.account}
+                onValueChange={(v) => setForm({ ...form, account: v })}
+                disabled={payFromAdvance === "yes"}
+              >
                 <SelectTrigger>
-                  <SelectValue placeholder="Select account" />
+                  <SelectValue
+                    placeholder={
+                      payFromAdvance === "yes" ? "Paid from advance balance" : "Select account"
+                    }
+                  />
                 </SelectTrigger>
                 <SelectContent>
                   {accounts.map((a) => (
@@ -250,7 +396,14 @@ export function SupplierPaymentForm({
                           {formatDate(bill.date)} · Pending {formatMoney(due)}
                         </p>
                       </div>
-                      <MoneyInput className="h-9" value={toNum(alloc[bill.id])} onChange={(n) => setAlloc({ ...alloc, [bill.id]: String(n) })} />
+                      <MoneyInput
+                        className="h-9"
+                        value={toNum(alloc[bill.id])}
+                        onChange={(n) => {
+                          setAllocTouched(true);
+                          setAlloc({ ...alloc, [bill.id]: String(n) });
+                        }}
+                      />
                     </div>
                   );
                 })}

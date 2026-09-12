@@ -878,7 +878,7 @@ export function PurchaseForm({
                         <div
                           className={cn(
                             "mt-2 grid grid-cols-2 gap-2 sm:mt-0 sm:contents",
-                            !expanded && "hidden sm:grid",
+                            !expanded && "hidden sm:contents",
                           )}
                         >
                           <div className="col-span-2 min-w-0 sm:col-span-1">

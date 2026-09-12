@@ -56,15 +56,11 @@ export function CustomerForm({
       toast.error("Customer name is required.");
       return;
     }
-    if (!form.phone.trim()) {
-      toast.error("Mobile number is required.");
-      return;
-    }
     const party = store.saveCustomer({
       id: editing?.id,
       name: form.name,
       company: form.company || undefined,
-      phone: form.phone,
+      phone: form.phone || undefined,
       email: form.email || undefined,
       billingAddress: form.billingAddress || undefined,
       city: form.city || undefined,
@@ -101,7 +97,7 @@ export function CustomerForm({
                 onChange={(e) => setForm({ ...form, company: e.target.value })}
               />
             </FormField>
-            <FormField label="Mobile" required>
+            <FormField label="Mobile (optional)">
               <Input
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}

@@ -98,7 +98,7 @@ export function SupplierForm({
                 onChange={(e) => setForm({ ...form, company: e.target.value })}
               />
             </FormField>
-            <FormField label="Mobile">
+            <FormField label="Mobile (optional)">
               <Input
                 value={form.phone}
                 onChange={(e) => setForm({ ...form, phone: e.target.value })}
