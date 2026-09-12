@@ -279,6 +279,8 @@ export function PurchaseForm({
     reference: "",
     method: "",
   });
+  // "yes" consumes the supplier's advance balance instead of a bank/cash account.
+  const [payFromAdvance, setPayFromAdvance] = useState<"no" | "yes">("yes");
   const [saving, setSaving] = useState(false);
 
   // Manual overrides — row totals + summary amounts.
@@ -308,6 +310,7 @@ export function PurchaseForm({
     setSaving(false);
     setPayMode("pending");
     setPay({ amount: 0, date: todayISO(), account: "", reference: "", method: "" });
+    setPayFromAdvance("yes");
     setLineOv({});
     setMakingOv({});
     setSubtotalOv(emptyOverride());
@@ -421,6 +424,48 @@ export function PurchaseForm({
     payMode === "paid" ? grandTotal : payMode === "pending" ? 0 : pay.amount,
   );
   const payAmount = paidOv.manual !== undefined ? round2(paidOv.manual) : payAmountAuto;
+
+  // Supplier advance = unallocated part of their purchase payments, oldest first.
+  const advanceTx = useMemo(
+    () =>
+      store.transactions
+        .filter(
+          (t) =>
+            !t.voided &&
+            t.category === "purchase_payment" &&
+            t.direction === "out" &&
+            t.partyId === head.partyId,
+        )
+        .map((tx) => ({
+          tx,
+          remaining: round2(
+            tx.amount - (tx.allocations ?? []).reduce((s, a) => s + a.amount, 0),
+          ),
+        }))
+        .filter((x) => x.remaining > 0)
+        .sort((a, b) =>
+          a.tx.date === b.tx.date
+            ? a.tx.code.localeCompare(b.tx.code)
+            : a.tx.date.localeCompare(b.tx.date),
+        ),
+    [store.transactions, head.partyId],
+  );
+  const advanceBalance = round2(advanceTx.reduce((s, x) => s + x.remaining, 0));
+
+  // Offer "Pay from advance" for Paid / Part Paid when the balance covers the amount.
+  const showPayFromAdvance =
+    Boolean(head.partyId) &&
+    (payMode === "paid" || payMode === "part") &&
+    payAmount > 0 &&
+    advanceBalance >= payAmount;
+  const fromAdvance = showPayFromAdvance && payFromAdvance === "yes";
+
+  useEffect(() => {
+    if (!showPayFromAdvance && payFromAdvance === "yes") {
+      setPayFromAdvance("no");
+    }
+  }, [showPayFromAdvance, payFromAdvance]);
+
   const allocatedNow = round2(Math.min(payAmount, grandTotal));
   const advanceNow = round2(Math.max(0, payAmount - grandTotal));
   const pendingNow = round2(Math.max(0, grandTotal - allocatedNow));
@@ -504,8 +549,14 @@ export function PurchaseForm({
       toast.error("Select the supply location for GST purchases.");
       return;
     }
-    if (payMode !== "pending" && !pay.account) {
+    if (payMode !== "pending" && !fromAdvance && !pay.account) {
       toast.error("Select the bank or cash account for the payment.");
+      return;
+    }
+    if (fromAdvance && payAmount > advanceBalance) {
+      toast.error(
+        `Advance balance is insufficient — only ${formatMoney(advanceBalance)} available.`,
+      );
       return;
     }
     if ((payMode === "part" || payMode === "advance") && !(payAmount > 0)) {
@@ -572,7 +623,45 @@ export function PurchaseForm({
       return;
     }
 
-    if (payMode !== "pending" && payAmount > 0 && result.id) {
+    // Pay from advance: no bank/cash debit — consume the supplier's advance
+    // entries (oldest first) by allocating them to this bill.
+    if (fromAdvance && allocatedNow > 0 && result.id) {
+      let left = allocatedNow;
+      for (const adv of advanceTx) {
+        if (left <= 0) break;
+        const take = round2(Math.min(adv.remaining, left));
+        const merged = new Map(
+          (adv.tx.allocations ?? []).map((a) => [a.invoiceId, round2(a.amount)]),
+        );
+        merged.set(result.id, round2((merged.get(result.id) ?? 0) + take));
+        const upd = store.updateEntry(
+          adv.tx.id,
+          {
+            date: adv.tx.date,
+            sourceType: adv.tx.sourceType,
+            accountId: adv.tx.accountId,
+            direction: adv.tx.direction,
+            amount: round2(adv.tx.amount),
+            category: adv.tx.category,
+            partyId: adv.tx.partyId,
+            particulars: adv.tx.particulars,
+            reference: adv.tx.reference,
+            paymentMethod: adv.tx.paymentMethod,
+            notes: adv.tx.notes,
+            allocations: [...merged.entries()].map(([invoiceId, amt]) => ({
+              invoiceId,
+              amount: amt,
+            })),
+          },
+          `Advance ${formatMoney(take)} used for purchase bill ${head.number.trim()}`,
+        );
+        if (!upd.ok) {
+          toast.error(upd.message);
+          break;
+        }
+        left = round2(left - take);
+      }
+    } else if (payMode !== "pending" && payAmount > 0 && result.id) {
       const [sourceType, accountId] = pay.account.split(":") as ["bank" | "cash", string];
       const entry = {
         date: pay.date,
@@ -1320,10 +1409,38 @@ export function PurchaseForm({
                     onChange={(e) => setPay({ ...pay, date: e.target.value })}
                   />
                 </FormField>
-                <FormField label="Bank / cash account" required>
-                  <Select value={pay.account} onValueChange={(v) => setPay({ ...pay, account: v })}>
+                {showPayFromAdvance && (
+                  <FormField label="Pay from advance">
+                    <Select
+                      value={payFromAdvance}
+                      onValueChange={(v) => setPayFromAdvance(v as "no" | "yes")}
+                    >
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="no">No</SelectItem>
+                        <SelectItem value="yes">Yes</SelectItem>
+                      </SelectContent>
+                    </Select>
+                    <p className="num mt-1 text-[11px] text-muted-foreground">
+                      Available advance: {formatMoney(advanceBalance)}
+                    </p>
+                  </FormField>
+                )}
+                <FormField
+                  label={fromAdvance ? "Bank / cash account (not used)" : "Bank / cash account"}
+                  required={!fromAdvance}
+                >
+                  <Select
+                    value={pay.account}
+                    onValueChange={(v) => setPay({ ...pay, account: v })}
+                    disabled={fromAdvance}
+                  >
                     <SelectTrigger>
-                      <SelectValue placeholder="Select account" />
+                      <SelectValue
+                        placeholder={fromAdvance ? "Paid from advance balance" : "Select account"}
+                      />
                     </SelectTrigger>
                     <SelectContent>
                       {accounts.map((a) => (
@@ -1359,7 +1476,9 @@ export function PurchaseForm({
                 Pending {formatMoney(pendingNow)}
               </div>
               <div className="rounded-lg bg-sl-advance-bg px-3 py-2 text-sm text-sl-advance">
-                Supplier advance {formatMoney(advanceNow)}
+                {fromAdvance
+                  ? `Advance left ${formatMoney(round2(Math.max(0, advanceBalance - allocatedNow)))}`
+                  : `Supplier advance ${formatMoney(advanceNow)}`}
               </div>
             </div>
           </div>
