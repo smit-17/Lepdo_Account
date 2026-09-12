@@ -977,13 +977,34 @@ function PartyPanel({ type, title }: { type: "customer" | "supplier"; title: str
                   </Button>
                 </>
               ) : (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setEditing({ id: p.id, name: p.name })}
-                >
-                  <Pencil className="size-3.5" />
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Rename"
+                    onClick={() => setEditing({ id: p.id, name: p.name })}
+                  >
+                    <Pencil className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    title="Delete"
+                    onClick={() => {
+                      if (
+                        !window.confirm(
+                          `Delete "${p.name}" from ${title.toLowerCase()}? Invoices and bills that already use this name are not changed.`,
+                        )
+                      )
+                        return;
+                      store.removeParty(p.id);
+                      if (editing?.id === p.id) setEditing(null);
+                      toast.success(`${title.slice(0, -1)} deleted.`);
+                    }}
+                  >
+                    <Trash2 className="size-3.5 text-destructive" />
+                  </Button>
+                </>
               )}
             </div>
           ))

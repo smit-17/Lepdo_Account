@@ -207,6 +207,8 @@ interface StoreValue extends LepdoData {
   voidSalesInvoice: (id: string) => void;
   restoreSalesInvoice: (id: string) => void;
   saveCustomer: (input: CustomerInput) => Party;
+  /** permanently delete a customer/supplier master record */
+  removeParty: (id: string) => void;
   nextPurchaseBillNumber: () => string;
   savePurchaseBill: (input: PurchaseBillInput) => { ok: boolean; message: string; id?: string };
   voidPurchaseBill: (id: string) => void;
@@ -1080,7 +1082,11 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       const name = input.name.trim();
       const existing = input.id
         ? data.parties.find((p) => p.id === input.id)
-        : data.parties.find((p) => p.name.trim().toLowerCase() === name.toLowerCase());
+        : data.parties.find(
+            (p) =>
+              p.name.trim().toLowerCase() === name.toLowerCase() &&
+              (!input.type || p.type === input.type),
+          );
       const party: Party = {
         id: existing?.id ?? uid("p"),
         name,
@@ -1103,6 +1109,21 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       return party;
     },
     [data.parties, log],
+  );
+
+  const removeParty = useCallback<StoreValue["removeParty"]>(
+    (id) => {
+      setData((prev) => {
+        const party = prev.parties.find((p) => p.id === id);
+        if (!party) return prev;
+        return {
+          ...prev,
+          parties: prev.parties.filter((p) => p.id !== id),
+          auditLogs: [log("delete", "customer", party.name), ...prev.auditLogs],
+        };
+      });
+    },
+    [log],
   );
 
   const nextPurchaseBillNumber = useCallback<StoreValue["nextPurchaseBillNumber"]>(() => {
@@ -1501,6 +1522,7 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       voidSalesInvoice,
       restoreSalesInvoice,
       saveCustomer,
+      removeParty,
       nextPurchaseBillNumber,
       savePurchaseBill,
       voidPurchaseBill,
@@ -1543,6 +1565,7 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       voidSalesInvoice,
       restoreSalesInvoice,
       saveCustomer,
+      removeParty,
       nextPurchaseBillNumber,
       savePurchaseBill,
       voidPurchaseBill,
