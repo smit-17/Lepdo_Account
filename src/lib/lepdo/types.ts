@@ -75,6 +75,8 @@ export interface InvoiceLine {
   quantity: number;
   carat: number;
   rate: number;
+  /** purchase-side manually entered line total */
+  total?: number | undefined;
   /** number of pieces */
   pcs?: number | undefined;
   /** purchase only — price per carat in USD (optional) */

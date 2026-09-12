@@ -71,6 +71,7 @@ const emptyLine = (): InvoiceLine => ({
   carat: 0,
   rate: 0,
   rateUsd: 0,
+  total: 0,
 });
 
 const emptyMaking = (): MakingLine => ({
@@ -284,7 +285,6 @@ export function PurchaseForm({
   const [saving, setSaving] = useState(false);
 
   // Manual overrides — row totals + summary amounts.
-  const [lineOv, setLineOv] = useState<Record<string, Override>>({});
   const [makingOv, setMakingOv] = useState<Record<string, Override>>({});
   const [subtotalOv, setSubtotalOv] = useState<Override>(emptyOverride());
   const [discountOv, setDiscountOv] = useState<Override>(emptyOverride());
@@ -311,7 +311,6 @@ export function PurchaseForm({
     setPayMode("pending");
     setPay({ amount: 0, date: todayISO(), account: "", reference: "", method: "" });
     setPayFromAdvance("yes");
-    setLineOv({});
     setMakingOv({});
     setSubtotalOv(emptyOverride());
     setDiscountOv(emptyOverride());
@@ -338,7 +337,11 @@ export function PurchaseForm({
       });
       setLines(
         (editing.lines ?? []).length
-          ? (editing.lines ?? []).map((l) => ({ ...l, pcs: l.pcs ?? 1 }))
+          ? (editing.lines ?? []).map((l) => ({
+              ...l,
+              pcs: l.pcs ?? 1,
+              total: l.total ?? round2(n(l.carat) * n(l.rate)),
+            }))
           : [emptyLine()],
       );
       setMaking(
@@ -374,12 +377,10 @@ export function PurchaseForm({
     () =>
       lines.map((l) => {
         const inr = round2(n(l.rateUsd) > 0 && usdRate > 0 ? n(l.rateUsd) * usdRate : n(l.rate));
-        const auto = round2(n(l.carat) * inr);
-        const ov = lineOv[l.id];
-        const total = ov?.manual !== undefined ? round2(ov.manual) : auto;
-        return { line: l, inr, auto, total };
+        const total = round2(n(l.total));
+        return { line: l, inr, total };
       }),
-    [lines, usdRate, lineOv],
+    [lines, usdRate],
   );
   const makingRows = useMemo(
     () =>
@@ -487,10 +488,6 @@ export function PurchaseForm({
   // Collect every active manual override so we can require a reason and log it.
   const activeOverrides = useMemo(() => {
     const list: { label: string; ov: Override; auto: number }[] = [];
-    diamondRows.forEach((r, i) => {
-      const ov = lineOv[r.line.id];
-      if (ov?.manual !== undefined) list.push({ label: `Row ${i + 1} total`, ov, auto: r.auto });
-    });
     if (subtotalOv.manual !== undefined) list.push({ label: "Subtotal", ov: subtotalOv, auto: subtotalAuto });
     if (discountOv.manual !== undefined) list.push({ label: "Discount", ov: discountOv, auto: discountAuto });
     if (shippingOv.manual !== undefined) list.push({ label: "Shipping / other", ov: shippingOv, auto: 0 });
@@ -500,7 +497,6 @@ export function PurchaseForm({
     return list;
   }, [
     diamondRows,
-    lineOv,
     subtotalOv,
     discountOv,
     shippingOv,
@@ -607,6 +603,7 @@ export function PurchaseForm({
               carat: n(r.line.carat),
               rate: r.inr,
               rateUsd: n(r.line.rateUsd) || undefined,
+              total: r.total,
             }))
           : [],
       makingLines: kind === "jewelry_making" ? buildMakingLines() : [],
@@ -741,7 +738,7 @@ export function PurchaseForm({
             {editing ? "Edit purchase bill" : "Add purchase"}
           </DialogTitle>
           <DialogDescription>
-            Totals are calculated automatically. This bill stays in the Purchase section only.
+          Enter each item total manually. This bill stays in the Purchase section only.
           </DialogDescription>
         </DialogHeader>
 
@@ -943,7 +940,6 @@ export function PurchaseForm({
                   {diamondRows.map((r, i) => {
                     const expanded = expandedRows[r.line.id] ?? false;
                     const usdDriven = n(r.line.rateUsd) > 0 && usdRate > 0;
-                    const ov = lineOv[r.line.id];
                     return (
                       <div
                         key={r.line.id}
@@ -1015,25 +1011,11 @@ export function PurchaseForm({
                           </div>
                           <div className="min-w-0">
                             <CellLabel label="Total INR" />
-                            <div className="flex items-center justify-end gap-1">
-                              <p className="num truncate text-right text-sm font-semibold text-navy">
-                                {formatMoney(r.total)}
-                              </p>
-                              {ov?.manual !== undefined ? <ManualBadge /> : null}
-                            </div>
-                            <div className="mt-1">
-                              <AutoManual
-                                auto={r.auto}
-                                manual={ov?.manual}
-                                reason={ov?.reason ?? ""}
-                                onManual={(v) =>
-                                  setLineOv((p) => ({ ...p, [r.line.id]: { manual: v, reason: p[r.line.id]?.reason ?? "" } }))
-                                }
-                                onReason={(v) =>
-                                  setLineOv((p) => ({ ...p, [r.line.id]: { manual: p[r.line.id]?.manual, reason: v } }))
-                                }
-                              />
-                            </div>
+                            <MoneyInput
+                              className="h-9 text-right"
+                              value={r.line.total}
+                              onChange={(v) => patchLine(r.line.id, { total: v })}
+                            />
                           </div>
                           <div className="hidden sm:block">
                             <RowActions

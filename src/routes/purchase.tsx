@@ -165,6 +165,29 @@ function PurchasePage() {
     [model.suppliers, q],
   );
   const brokers = useMemo(() => brokerGroups(rows), [rows]);
+  const recentBills = useMemo(
+    () =>
+      [...rows].sort((a, b) => {
+        const aAdded = a.bill.createdAt ?? a.bill.updatedAt ?? a.bill.date;
+        const bAdded = b.bill.createdAt ?? b.bill.updatedAt ?? b.bill.date;
+        return bAdded.localeCompare(aAdded) || b.bill.number.localeCompare(a.bill.number);
+      }),
+    [rows],
+  );
+  const outstandingSuppliers = useMemo(
+    () =>
+      suppliers
+        .filter((supplier) => supplier.pending > 0)
+        .sort((a, b) => {
+          const latestAdded = (bills: BillView[]) =>
+            bills.reduce((latest, view) => {
+              const added = view.bill.createdAt ?? view.bill.updatedAt ?? view.bill.date;
+              return added > latest ? added : latest;
+            }, "");
+          return latestAdded(b.bills).localeCompare(latestAdded(a.bills));
+        }),
+    [suppliers],
+  );
 
   /* ---------------------- Invoice-Wise filtered + sorted --------------------- */
   const [bFrom, bTo] = useMemo(() => {
@@ -427,8 +450,8 @@ function PurchasePage() {
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <Panel title="Recent bills">
-              <div className="space-y-2">
-                {rows.slice(0, 6).map((v) => (
+              <div className="max-h-[28rem] space-y-2 overflow-y-auto overscroll-contain pr-1">
+                {recentBills.map((v) => (
                   <button
                     key={v.bill.id}
                     type="button"
@@ -463,11 +486,8 @@ function PurchasePage() {
             </Panel>
 
             <Panel title="Supplier outstanding">
-              <div className="space-y-2">
-                {suppliers
-                  .filter((s) => s.pending > 0)
-                  .slice(0, 6)
-                  .map((s) => (
+              <div className="max-h-[28rem] space-y-2 overflow-y-auto overscroll-contain pr-1">
+                {outstandingSuppliers.map((s) => (
                     <div
                       key={s.party.id}
                       className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2 rounded-lg border border-border p-2"
@@ -496,7 +516,7 @@ function PurchasePage() {
                       </div>
                     </div>
                   ))}
-                {!suppliers.some((s) => s.pending > 0) ? (
+                {!outstandingSuppliers.length ? (
                   <p className="p-3 text-sm text-muted-foreground">No pending supplier payables.</p>
                 ) : null}
               </div>
@@ -546,7 +566,7 @@ function PurchasePage() {
             }
           />
           <Panel title={`Purchase bills · ${billRows.length}`}>
-            <div className="space-y-2">
+            <div className="max-h-[calc(100dvh-19rem)] min-h-0 space-y-2 overflow-y-auto overscroll-contain pr-1">
               {billRows.map((v) => (
                 <BillRow
                   key={v.bill.id}
