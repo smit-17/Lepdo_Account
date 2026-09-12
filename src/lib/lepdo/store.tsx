@@ -241,9 +241,12 @@ const StoreContext = (g.__lepdoStoreCtx ??= createContext<StoreValue | null>(nul
 function hydrate(parsed: Partial<LepdoData> | null | undefined): LepdoData {
   const seed = buildSeed();
   if (!parsed || Object.keys(parsed).length === 0) return seed;
+  const deletedPartyIds = parsed.deletedPartyIds ?? {};
   return {
     ...seed,
     ...parsed,
+    deletedPartyIds,
+    parties: (parsed.parties ?? seed.parties).filter((party) => !deletedPartyIds[party.id]),
     brokers: parsed.brokers ?? [],
     sellers: parsed.sellers ?? [],
     liabilities: parsed.liabilities ?? [],
@@ -1112,6 +1115,9 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
       };
       setData((prev) => ({
         ...prev,
+        deletedPartyIds: Object.fromEntries(
+          Object.entries(prev.deletedPartyIds ?? {}).filter(([id]) => id !== party.id),
+        ),
         parties: prev.parties.some((p) => p.id === party.id)
           ? prev.parties.map((p) => (p.id === party.id ? { ...p, ...party } : p))
           : [...prev.parties, party],
@@ -1130,6 +1136,10 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
         return {
           ...prev,
           parties: prev.parties.filter((p) => p.id !== id),
+          deletedPartyIds: {
+            ...(prev.deletedPartyIds ?? {}),
+            [id]: new Date().toISOString(),
+          },
           auditLogs: [log("delete", "customer", party.name), ...prev.auditLogs],
         };
       });

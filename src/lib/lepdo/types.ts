@@ -499,6 +499,8 @@ export interface AppSettings {
 export interface LepdoData {
   /** Server-issued reset marker; prevents stale browser snapshots restoring cleared records. */
   accountingResetAt?: string | undefined;
+  /** Permanent deletion markers so stale devices cannot restore removed contacts. */
+  deletedPartyIds?: Record<string, string> | undefined;
   bankAccounts: BankAccount[];
   cashLocations: CashLocation[];
   parties: Party[];
