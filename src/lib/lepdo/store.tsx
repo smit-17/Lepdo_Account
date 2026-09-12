@@ -301,6 +301,17 @@ export function LepdoProvider({ children }: { children: ReactNode; userId?: stri
 
   const applyRemote = useCallback(
     (parsed: Partial<LepdoData>, json: string, updatedAt: string | null) => {
+      // Ignore stale snapshots (e.g. a delayed echo of one of our own earlier
+      // writes arriving after a newer save): they would resurrect records the
+      // user has just deleted.
+      if (
+        updatedAt &&
+        versionRef.current &&
+        updatedAt <= versionRef.current &&
+        syncedJsonRef.current !== json
+      ) {
+        return;
+      }
       versionRef.current = updatedAt;
       if (syncedJsonRef.current === json) {
         baseJsonRef.current = json;
