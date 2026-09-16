@@ -50,14 +50,17 @@ function Dashboard() {
 
   const sum = (rows: { amount: number }[]) => round2(rows.reduce((s, r) => s + r.amount, 0));
 
-  const salesScope = store.salesInvoices.filter((i) => inRange(i.date));
-  const purchaseScope = store.purchaseBills.filter((i) => inRange(i.date));
+  const liveInvoices = store.salesInvoices.filter((i) => !i.voided);
+  const liveBills = store.purchaseBills.filter((b) => !b.voided);
 
-  const salesAll = round2(store.salesInvoices.reduce((s, i) => s + i.total, 0));
+  const salesScope = liveInvoices.filter((i) => inRange(i.date));
+  const purchaseScope = liveBills.filter((i) => inRange(i.date));
+
+  const salesAll = round2(liveInvoices.reduce((s, i) => s + i.total, 0));
   const salesPeriod = round2(salesScope.reduce((s, i) => s + i.total, 0));
   const salesPaid = round2(salesScope.reduce((s, i) => s + Math.min(i.paid, i.total), 0));
 
-  const purchaseAll = round2(store.purchaseBills.reduce((s, i) => s + i.total, 0));
+  const purchaseAll = round2(liveBills.reduce((s, i) => s + i.total, 0));
   const purchasePeriod = round2(purchaseScope.reduce((s, i) => s + i.total, 0));
   const purchasePaid = round2(purchaseScope.reduce((s, i) => s + Math.min(i.paid, i.total), 0));
 

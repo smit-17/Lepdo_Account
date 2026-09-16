@@ -61,6 +61,7 @@ import {
   type BankUiCategory,
 } from "@/lib/lepdo/bank";
 import { categoryLabel, categoryTone } from "@/lib/lepdo/constants";
+import { EXPENSE_CATEGORIES } from "@/lib/lepdo/expense";
 import { Combo } from "@/components/lepdo/sales/ui";
 import { downloadCsv, downloadExcel, downloadPdf, type ReportRow } from "@/lib/lepdo/report";
 
@@ -98,6 +99,7 @@ interface FormState {
   amount: string;
   reference: string;
   notes: string;
+  expenseCategory: string;
 }
 
 const emptyForm = (): FormState => ({
@@ -112,6 +114,7 @@ const emptyForm = (): FormState => ({
   amount: "",
   reference: "",
   notes: "",
+  expenseCategory: "",
 });
 
 function bankCategoryLabel(id: CategoryId | null): string {
@@ -193,7 +196,7 @@ function BankLedgerPage() {
             (bankFilter === "all" || t.accountId === bankFilter),
         )
         .sort((a, b) =>
-          a.date === b.date ? b.createdAt.localeCompare(a.createdAt) : b.date.localeCompare(a.date),
+          a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
         ),
     [store.transactions, from, to, bankFilter],
   );
@@ -626,6 +629,7 @@ function BankEntryForm({
             amount: String(editing.amount),
             reference: editing.reference ?? "",
             notes: editing.notes ?? "",
+            expenseCategory: editing.expenseCategory ?? "",
           }
         : emptyForm(),
     );
@@ -640,6 +644,7 @@ function BankEntryForm({
   const fixed = bankFixedDirection(form.category);
   const direction: "in" | "out" = fixed ?? form.direction;
   const amount = Number(form.amount) || 0;
+  const isBankExpense = form.category === "expense" && direction === "out";
 
   useEffect(() => {
     if (fixed && form.direction !== fixed) setForm((f) => ({ ...f, direction: fixed }));
@@ -696,6 +701,10 @@ function BankEntryForm({
       toast.error("Select or enter a party.");
       return;
     }
+    if (isBankExpense && !form.expenseCategory) {
+      toast.error("Select the expense category for this bank expense.");
+      return;
+    }
     if (duplicate && !dupAck) {
       setDupAck(true);
       toast.warning("A similar entry already exists. Press Save Entry again to confirm.");
@@ -730,6 +739,9 @@ function BankEntryForm({
       reference: form.reference.trim() || undefined,
       notes: form.notes.trim() || undefined,
       ledger: true,
+      ...(isBankExpense
+        ? { expenseCategory: form.expenseCategory, expensePaid: true }
+        : {}),
       ...(isTransfer
         ? {
             destinationType: form.destinationKind as "bank" | "cash",
@@ -837,36 +849,73 @@ function BankEntryForm({
                   </SelectContent>
                 </Select>
               </Field>
-            ) : fixed ? null : (
-              <Field label="Entry type">
-                <div className="grid grid-cols-2 gap-2">
-                  {(["in", "out"] as const).map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => set("direction", d)}
-                      className={cn(
-                        "h-9 rounded-md border text-sm font-medium transition-colors",
-                        form.direction === d
-                          ? d === "in"
-                            ? "border-pos bg-pos-bg text-pos"
-                            : "border-neg bg-neg-bg text-neg"
-                          : "border-border text-muted-foreground hover:bg-muted",
-                      )}
-                    >
-                      {isUchhina
-                        ? d === "in"
-                          ? "Received back"
-                          : "Given"
-                        : d === "in"
-                          ? "Credit"
-                          : "Debit"}
-                    </button>
-                  ))}
-                </div>
-              </Field>
-            )}
+            ) : null}
           </div>
+
+          {!isTransfer ? (
+            <Field label="Entry type">
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                {(["in", "out"] as const).map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    aria-pressed={direction === d}
+                    onClick={() => {
+                      if (fixed) return;
+                      set("direction", d);
+                    }}
+                    className={cn(
+                      "rounded-lg border px-3 py-2 text-left text-sm font-semibold transition-colors",
+                      direction === d
+                        ? d === "in"
+                          ? "border-pos bg-pl-green text-navy"
+                          : "border-neg bg-pl-red text-navy"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                      fixed && direction !== d ? "cursor-not-allowed opacity-50" : "",
+                    )}
+                  >
+                    {isUchhina
+                      ? d === "in"
+                        ? "Credit — Received back"
+                        : "Debit — Given"
+                      : d === "in"
+                        ? "Credit — Money In"
+                        : "Debit — Money Out"}
+                  </button>
+                ))}
+              </div>
+              {fixed ? (
+                <p className="mt-1 text-xs text-muted-foreground">
+                  This category is always {fixed === "in" ? "a credit (money in)" : "a debit (money out)"}.
+                </p>
+              ) : null}
+            </Field>
+          ) : null}
+
+          {isBankExpense ? (
+            <Field label="Expense category">
+              <Select
+                value={form.expenseCategory}
+                onValueChange={(v) => set("expenseCategory", v)}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select expense category" />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXPENSE_CATEGORIES.map((c) => (
+                    <SelectItem key={c.label} value={c.label}>
+                      {c.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                This entry will also appear in the Expense Ledger as Paid, linked to this bank
+                entry.
+              </p>
+            </Field>
+          ) : null}
+
 
           {needsParty ? (
             <Field label={form.category === "sale_payment" ? "Customer" : "Supplier"}>

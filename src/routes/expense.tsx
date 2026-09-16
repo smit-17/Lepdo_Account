@@ -7,7 +7,7 @@ import {
   type SelectFilterDef,
   type SortId,
 } from "@/components/lepdo/FilterBar";
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
 import { Download, MoreVertical, PieChart, Plus, Receipt, TrendingDown, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -121,6 +121,7 @@ const emptyForm = (): FormState => ({
 
 function ExpensePage() {
   const store = useLepdo();
+  const navigate = useNavigate();
   const today = todayISO();
   const [preset, setPreset] = useState<BankPreset>("month");
   const [customFrom, setCustomFrom] = useState(today);
@@ -160,10 +161,31 @@ function ExpensePage() {
       ? "Unpaid"
       : (sources.find((s) => s.id === t.accountId)?.label ?? "—");
 
-  /** every non-void expense recorded in the Expense section (never Bank/Cash ledger entries) */
+  const goToSource = () => {
+    void navigate({ to: "/bank-ledger" });
+  };
+
+  /** true when this expense row is a Bank Entry debit categorised as Expense */
+  const isBankLinked = (t: Transaction) => isLedgerEntry(t) && t.sourceType === "bank";
+
+  const bankLabel = (t: Transaction) =>
+    BANKS.find((b) => b.id === t.accountId)?.bankName ??
+    store.bankAccounts.find((b) => b.id === t.accountId)?.nickname ??
+    "Bank";
+
+  /**
+   * Every non-deleted expense: entries recorded in the Expense section, plus
+   * Bank Entry debits categorised as Expense (linked by their own transaction id,
+   * never duplicated). Cash Book entries are deliberately excluded.
+   */
   const allExpenses = useMemo(
     () =>
-      store.transactions.filter((t) => t.category === "expense" && !t.voided && !isLedgerEntry(t)),
+      store.transactions.filter(
+        (t) =>
+          t.category === "expense" &&
+          !t.voided &&
+          (!isLedgerEntry(t) || (t.sourceType === "bank" && t.direction === "out")),
+      ),
     [store.transactions],
   );
 
@@ -487,7 +509,13 @@ function ExpensePage() {
                         {formatDate(t.date)}
                       </td>
                       <td className="px-3 py-2">
-                        <CategoryChip head={expenseHead(t.expenseCategory)} />
+                        {isBankLinked(t) && !t.expenseCategory ? (
+                          <span className="inline-flex whitespace-nowrap rounded-md bg-pl-loss px-2 py-1 text-xs font-medium text-navy">
+                            Category missing
+                          </span>
+                        ) : (
+                          <CategoryChip head={expenseHead(t.expenseCategory)} />
+                        )}
                       </td>
                       <td className="max-w-[340px] px-3 py-2 text-muted-foreground">
                         <span className="block break-words">{t.particulars}</span>
@@ -509,13 +537,34 @@ function ExpensePage() {
                           {sourceLabel(t)}
                         </span>
                       </td>
-                      <td className="max-w-[320px] px-3 py-2"></td>
+                      <td className="max-w-[320px] px-3 py-2">
+                        {isBankLinked(t) ? (
+                          <div className="space-y-1">
+                            <span className="inline-flex whitespace-nowrap rounded-md bg-pl-blue px-2 py-1 text-xs font-medium text-navy">
+                              Bank Entry · {bankLabel(t)}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => goToSource()}
+                              className="block text-xs font-medium text-navy underline underline-offset-2"
+                            >
+                              View Source
+                            </button>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            {sourceLabel(t) === "Unpaid" ? "Expense entry · Unpaid" : "Expense entry · Paid"}
+                          </span>
+                        )}
+                      </td>
                       <td className="num whitespace-nowrap px-3 py-2 text-right font-semibold text-navy">
                         {formatMoney(t.amount)}
                       </td>
                       <td className="px-2 py-2 text-right">
                         <RowMenu
                           onView={() => setViewing(t)}
+                          linked={isBankLinked(t)}
+                          onSource={goToSource}
                           onEdit={() => {
                             setEditing(t);
                             setFormOpen(true);
@@ -541,8 +590,19 @@ function ExpensePage() {
                       <p className="mt-1 break-words text-sm font-medium text-navy">
                         {t.particulars}
                       </p>
-                      <div className="mt-1.5">
-                        <CategoryChip head={expenseHead(t.expenseCategory)} />
+                      <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                        {isBankLinked(t) && !t.expenseCategory ? (
+                          <span className="inline-flex whitespace-nowrap rounded-md bg-pl-loss px-2 py-1 text-xs font-medium text-navy">
+                            Category missing
+                          </span>
+                        ) : (
+                          <CategoryChip head={expenseHead(t.expenseCategory)} />
+                        )}
+                        {isBankLinked(t) ? (
+                          <span className="inline-flex whitespace-nowrap rounded-md bg-pl-blue px-2 py-1 text-xs font-medium text-navy">
+                            Bank Entry · {bankLabel(t)}
+                          </span>
+                        ) : null}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-col items-end gap-1">
@@ -551,6 +611,8 @@ function ExpensePage() {
                       </span>
                       <RowMenu
                         onView={() => setViewing(t)}
+                        linked={isBankLinked(t)}
+                        onSource={goToSource}
                         onEdit={() => {
                           setEditing(t);
                           setFormOpen(true);
@@ -691,10 +753,14 @@ function RowMenu({
   onView,
   onEdit,
   onVoid,
+  linked,
+  onSource,
 }: {
   onView: () => void;
   onEdit: () => void;
   onVoid: () => void;
+  linked?: boolean;
+  onSource?: () => void;
 }) {
   return (
     <DropdownMenu>
@@ -705,10 +771,16 @@ function RowMenu({
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         <DropdownMenuItem onClick={onView}>View</DropdownMenuItem>
-        <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
-        <DropdownMenuItem className="text-neg" onClick={onVoid}>
-          Delete
-        </DropdownMenuItem>
+        {linked ? (
+          <DropdownMenuItem onClick={onSource}>Edit in Bank Ledger</DropdownMenuItem>
+        ) : (
+          <>
+            <DropdownMenuItem onClick={onEdit}>Edit</DropdownMenuItem>
+            <DropdownMenuItem className="text-neg" onClick={onVoid}>
+              Delete
+            </DropdownMenuItem>
+          </>
+        )}
       </DropdownMenuContent>
     </DropdownMenu>
   );

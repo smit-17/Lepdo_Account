@@ -32,6 +32,36 @@ export type Database = {
         }
         Relationships: []
       }
+      app_security: {
+        Row: {
+          created_at: string
+          failed_attempts: number
+          id: string
+          locked_until: string | null
+          pin_hash: string | null
+          pin_updated_at: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          failed_attempts?: number
+          id?: string
+          locked_until?: string | null
+          pin_hash?: string | null
+          pin_updated_at?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          failed_attempts?: number
+          id?: string
+          locked_until?: string | null
+          pin_hash?: string | null
+          pin_updated_at?: string | null
+          updated_at?: string
+        }
+        Relationships: []
+      }
       profiles: {
         Row: {
           created_at: string
@@ -209,6 +239,7 @@ export type Database = {
         | "manager"
         | "staff"
         | "viewer"
+        | "quick_access"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -336,7 +367,15 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
-      app_role: ["super_admin", "owner", "admin", "manager", "staff", "viewer"],
+      app_role: [
+        "super_admin",
+        "owner",
+        "admin",
+        "manager",
+        "staff",
+        "viewer",
+        "quick_access",
+      ],
     },
   },
 } as const
