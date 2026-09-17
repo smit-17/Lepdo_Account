@@ -168,7 +168,7 @@ function computeJewelry(item: JewelryItem): JewelryItem {
   };
 }
 
-type PayMode = "pending" | "part" | "full";
+type PayMode = "pending" | "part" | "full" | "paid";
 
 /** Local-only manual override state per item, keyed by item id (not persisted directly). */
 interface ItemManual {
@@ -462,7 +462,11 @@ export function SaleForm({
   const referenceOptions = uniq(store.transactions.map((t) => t.reference));
 
   const autoReceived =
-    payMode === "full" ? payableTotal : payMode === "part" ? round2(toNum(pay.amount) || 0) : 0;
+    payMode === "full" || payMode === "paid"
+      ? payableTotal
+      : payMode === "part"
+        ? round2(toNum(pay.amount) || 0)
+        : 0;
   const receivedNow = manualReceived !== undefined ? round2(manualReceived) : autoReceived;
 
   function manualNotes(): string {
@@ -1684,6 +1688,7 @@ export function SaleForm({
                       [
                         { id: "full", label: "Full Advance" },
                         { id: "part", label: "Part Received" },
+                        { id: "paid", label: "Paid" },
                         { id: "pending", label: "Pending" },
                       ] as { id: PayMode; label: string }[]
                     ).map((o) => (
@@ -1711,7 +1716,7 @@ export function SaleForm({
                   ) : payMode !== "pending" ? (
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <FormField label="Amount received" required>
-                        {payMode === "full" ? (
+                        {payMode === "full" || payMode === "paid" ? (
                           <AutoManual
                             auto={payableTotal}
                             manual={manualReceived}
