@@ -59,6 +59,7 @@ import {
   uiCategoryFromCategoryId,
   type BankPreset,
   type BankUiCategory,
+  compareLedgerOrder,
 } from "@/lib/lepdo/bank";
 import { categoryLabel, categoryTone } from "@/lib/lepdo/constants";
 import { EXPENSE_CATEGORIES } from "@/lib/lepdo/expense";
@@ -172,9 +173,7 @@ function BankLedgerPage() {
           (t) =>
             t.accountId === bank.id && t.sourceType === "bank" && !t.voided && isLedgerEntry(t),
         )
-        .sort((a, b) =>
-          a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
-        );
+        .sort(compareLedgerOrder);
       for (const t of rows) {
         bal += t.direction === "in" ? t.amount : -t.amount;
         map.set(t.id, bal);
@@ -195,9 +194,7 @@ function BankLedgerPage() {
             t.date <= to &&
             (bankFilter === "all" || t.accountId === bankFilter),
         )
-        .sort((a, b) =>
-          a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
-        ),
+        .sort(compareLedgerOrder),
     [store.transactions, from, to, bankFilter],
   );
 
@@ -236,9 +233,7 @@ function BankLedgerPage() {
 
   const reportRows = (): ReportRow[] =>
     [...postedRows]
-      .sort((a, b) =>
-        a.date === b.date ? a.createdAt.localeCompare(b.createdAt) : a.date.localeCompare(b.date),
-      )
+      .sort(compareLedgerOrder)
       .map((t) => ({
         date: t.date,
         bank: bankName(t.accountId),

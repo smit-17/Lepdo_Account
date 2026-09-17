@@ -178,3 +178,17 @@ export function periodLabel(preset: BankPreset, from: string, to: string): strin
   const label = BANK_PRESETS.find((p) => p.id === preset)?.label ?? "Period";
   return preset === "custom" ? `${from} to ${to}` : `${label} (${from} to ${to})`;
 }
+
+/**
+ * Stable chronological order for ledger rows: date, then creation time, then a
+ * deterministic id tie-break so rows created in the same millisecond never shuffle
+ * when the cloud snapshot is merged (array order alone is not stable across syncs).
+ */
+export function compareLedgerOrder(
+  a: { date: string; createdAt: string; id: string },
+  b: { date: string; createdAt: string; id: string },
+): number {
+  if (a.date !== b.date) return a.date.localeCompare(b.date);
+  if (a.createdAt !== b.createdAt) return a.createdAt.localeCompare(b.createdAt);
+  return a.id.localeCompare(b.id);
+}
