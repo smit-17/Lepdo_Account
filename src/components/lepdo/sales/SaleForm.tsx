@@ -462,9 +462,9 @@ export function SaleForm({
   const referenceOptions = uniq(store.transactions.map((t) => t.reference));
 
   const autoReceived =
-    payMode === "full" || payMode === "paid"
+    payMode === "full"
       ? payableTotal
-      : payMode === "part"
+      : payMode === "part" || payMode === "paid"
         ? round2(toNum(pay.amount) || 0)
         : 0;
   const receivedNow = manualReceived !== undefined ? round2(manualReceived) : autoReceived;
@@ -596,6 +596,10 @@ export function SaleForm({
       const amt = round2(toNum(pay.amount) || 0);
       if (!(amt > 0)) return "Part received amount must be above ₹0.";
       if (amt >= payableTotal) return "Part received amount must be below the grand total.";
+    }
+    if (payMode === "paid") {
+      const amt = round2(toNum(pay.amount) || 0);
+      if (!(amt > 0)) return "Paid amount must be above ₹0.";
     }
     return null;
   }
@@ -1716,7 +1720,7 @@ export function SaleForm({
                   ) : payMode !== "pending" ? (
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <FormField label="Amount received" required>
-                        {payMode === "full" || payMode === "paid" ? (
+                        {payMode === "full" ? (
                           <AutoManual
                             auto={payableTotal}
                             manual={manualReceived}
