@@ -124,12 +124,6 @@ export function PaymentForm({
         .map((inv) => ({ invoiceId: inv.id, amount: round2(Number(alloc[inv.id]) || 0) }))
         .filter((a) => a.amount > 0),
     };
-    if (store.isLikelyDuplicate(entry)) {
-      toast.error(
-        "A matching receipt already exists for this date, account, amount and reference.",
-      );
-      return;
-    }
     setSaving(true);
     const result = store.addEntry(entry);
     if (!result.ok) {

@@ -621,12 +621,8 @@ export function SaleForm({
         reference: pay.reference || undefined,
         allocations: [{ invoiceId: result.id, amount: receivedNow }],
       };
-      if (store.isLikelyDuplicate(entry)) {
-        toast.warning("A matching receipt already exists — payment was not duplicated.");
-      } else {
-        const rec = store.addEntry(entry);
-        if (!rec.ok) toast.error(rec.message);
-      }
+      const rec = store.addEntry(entry);
+      if (!rec.ok) toast.error(rec.message);
     }
 
     toast.success(result.message);
