@@ -62,6 +62,13 @@ export const CATEGORIES: CategoryMeta[] = [
     excludeFromProfit: true,
   },
   {
+    id: "opening_balance",
+    label: "Opening Balance",
+    tone: "investment",
+    allows: ["in"],
+    excludeFromProfit: true,
+  },
+  {
     id: "owner_drawing",
     label: "Owner Drawing / Personal Use",
     tone: "drawing",

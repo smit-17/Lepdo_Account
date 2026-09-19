@@ -42,7 +42,7 @@ import { CustomerForm } from "./CustomerForm";
 import { ContactPicker } from "@/components/lepdo/ContactPicker";
 import { CellLabel, ColHead, Combo, FormField, Row, WIDE_MODAL_CLASS } from "./ui";
 import { MasterCombo } from "@/components/lepdo/shared";
-import { AutoManual, ManualBadge, MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
+import { MoneyInput, NumInput, toNum } from "@/components/lepdo/numeric";
 
 /** Sale-type master label -> internal SaleType id. */
 const SALE_TYPE_ID: Record<string, SaleType> = {
@@ -471,23 +471,23 @@ export function SaleForm({
 
   function manualNotes(): string {
     const parts: string[] = [];
-    if (manualSubtotal !== undefined)
+    if (manualSubtotal !== undefined && manualSubtotalReason.trim())
       parts.push(
         `Subtotal manually adjusted from ${formatMoney(autoSubtotal)} to ${formatMoney(manualSubtotal)} — ${manualSubtotalReason}`,
       );
-    if (manualDiscount !== undefined)
+    if (manualDiscount !== undefined && manualDiscountReason.trim())
       parts.push(
         `Discount manually adjusted from ${formatMoney(autoDiscount)} to ${formatMoney(manualDiscount)} — ${manualDiscountReason}`,
       );
-    if (manualShipping !== undefined)
+    if (manualShipping !== undefined && manualShippingReason.trim())
       parts.push(
         `Shipping manually adjusted from ${formatMoney(autoShipping)} to ${formatMoney(manualShipping)} — ${manualShippingReason}`,
       );
-    if (manualGrandTotal !== undefined)
+    if (manualGrandTotal !== undefined && manualGrandTotalReason.trim())
       parts.push(
         `Grand total manually adjusted from ${formatMoney(autoGrandTotal)} to ${formatMoney(manualGrandTotal)} — ${manualGrandTotalReason}`,
       );
-    if (manualReceived !== undefined)
+    if (manualReceived !== undefined && manualReceivedReason.trim())
       parts.push(
         `Received amount manually adjusted from ${formatMoney(autoReceived)} to ${formatMoney(manualReceived)} — ${manualReceivedReason}`,
       );
@@ -495,29 +495,7 @@ export function SaleForm({
   }
 
   function findMissingManualReason(): string | null {
-    if (manualSubtotal !== undefined && !manualSubtotalReason.trim())
-      return "Enter a reason for the manually adjusted subtotal.";
-    if (manualDiscount !== undefined && !manualDiscountReason.trim())
-      return "Enter a reason for the manually adjusted discount.";
-    if (manualShipping !== undefined && !manualShippingReason.trim())
-      return "Enter a reason for the manually adjusted shipping / other amount.";
-    if (manualGrandTotal !== undefined && !manualGrandTotalReason.trim())
-      return "Enter a reason for the manually adjusted grand total.";
-    if (manualReceived !== undefined && !manualReceivedReason.trim())
-      return "Enter a reason for the manually adjusted received amount.";
-    for (const r of diamondRows) {
-      if (r.manualAmount !== undefined && !r.manualReason.trim())
-        return `Enter a reason for the manually adjusted amount on "${r.description || "an item"}".`;
-    }
-    for (const j of jewelry) {
-      const m = getItemManual(j.id);
-      if (m.metal !== undefined && !m.metalReason.trim())
-        return `Enter a reason for the manually adjusted metal value on "${j.description || "an item"}".`;
-      if (m.making !== undefined && !m.makingReason.trim())
-        return `Enter a reason for the manually adjusted making charges on "${j.description || "an item"}".`;
-      if (m.total !== undefined && !m.totalReason.trim())
-        return `Enter a reason for the manually adjusted total on "${j.description || "an item"}".`;
-    }
+    // amounts are typed manually now — no adjustment reasons are collected
     return null;
   }
 
@@ -946,22 +924,18 @@ export function SaleForm({
                           </div>
 
                           <div className="sm:col-span-3">
-                            <CellLabel label="Total Amount (CT × Price/CT)" />
-                            <AutoManual
-                              auto={r.autoAmount}
-                              manual={r.manualAmount}
-                              reason={r.manualReason}
-                              onManual={(n) =>
+                            <CellLabel label="Total Amount" />
+                            <MoneyInput
+                              className="h-9"
+                              value={
+                                r.manualAmount !== undefined
+                                  ? r.manualAmount
+                                  : round2((Number(r.carat) || 0) * (Number(r.rate) || 0))
+                              }
+                              onChange={(n) =>
                                 setDiamondRows(
                                   diamondRows.map((x, i) =>
                                     i === idx ? { ...x, manualAmount: n } : x,
-                                  ),
-                                )
-                              }
-                              onReason={(v) =>
-                                setDiamondRows(
-                                  diamondRows.map((x, i) =>
-                                    i === idx ? { ...x, manualReason: v } : x,
                                   ),
                                 )
                               }
@@ -1098,7 +1072,6 @@ export function SaleForm({
                                 </div>
                                 <div className="num truncate text-sm font-semibold text-navy sm:col-span-2">
                                   {formatMoney(it.total)}
-                                  {m.total !== undefined ? <ManualBadge /> : null}
                                 </div>
                                 <div className="flex shrink-0 flex-wrap gap-1 sm:col-span-1">
                                   <Button
@@ -1297,16 +1270,10 @@ export function SaleForm({
                                         onChange={(n) => setJw(it.id, { metalRatePerGram: n })}
                                       />
                                     </FormField>
-                                    <FormField
-                                      label="Total Metal Value"
-                                      hint="24KT fine weight × price — calculated."
-                                    >
-                                      <AutoManual
-                                        auto={it.metalValue}
-                                        manual={m.metal}
-                                        reason={m.metalReason}
-                                        onManual={(n) => setItemManual(it.id, { metal: n })}
-                                        onReason={(v) => setItemManual(it.id, { metalReason: v })}
+                                    <FormField label="Total Metal Value">
+                                      <MoneyInput
+                                        value={m.metal !== undefined ? m.metal : it.metalValue}
+                                        onChange={(n) => setItemManual(it.id, { metal: n })}
                                       />
                                     </FormField>
                                     <FormField label="Making Charge / Gram">
@@ -1315,16 +1282,10 @@ export function SaleForm({
                                         onChange={(n) => setJw(it.id, { makingRatePerGram: n })}
                                       />
                                     </FormField>
-                                    <FormField
-                                      label="Total Making Charges"
-                                      hint="Net weight × making rate — calculated."
-                                    >
-                                      <AutoManual
-                                        auto={it.makingValue}
-                                        manual={m.making}
-                                        reason={m.makingReason}
-                                        onManual={(n) => setItemManual(it.id, { making: n })}
-                                        onReason={(v) => setItemManual(it.id, { makingReason: v })}
+                                    <FormField label="Total Making Charges">
+                                      <MoneyInput
+                                        value={m.making !== undefined ? m.making : it.makingValue}
+                                        onChange={(n) => setItemManual(it.id, { making: n })}
                                       />
                                     </FormField>
                                   </div>
@@ -1494,13 +1455,14 @@ export function SaleForm({
                                     <p className="mb-1 text-xs font-medium text-muted-foreground">
                                       Total Jewelry Value
                                     </p>
-                                    <AutoManual
-                                      auto={round2(it.metalValue + it.makingValue + it.stoneValue)}
-                                      manual={m.total}
-                                      reason={m.totalReason}
-                                      onManual={(n) => setItemManual(it.id, { total: n })}
-                                      onReason={(v) => setItemManual(it.id, { totalReason: v })}
-                                      className="max-w-sm"
+                                    <MoneyInput
+                                      className="h-9 max-w-sm"
+                                      value={
+                                        m.total !== undefined
+                                          ? m.total
+                                          : round2(it.metalValue + it.makingValue + it.stoneValue)
+                                      }
+                                      onChange={(n) => setItemManual(it.id, { total: n })}
                                     />
                                   </div>
                                 </div>
@@ -1634,46 +1596,34 @@ export function SaleForm({
                 <div className="space-y-2 rounded-xl border border-border bg-sl-total-bg p-3 text-sm text-sl-total">
                   <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
                     <span>Subtotal</span>
-                    <AutoManual
-                      auto={autoSubtotal}
-                      manual={manualSubtotal}
-                      reason={manualSubtotalReason}
-                      onManual={setManualSubtotal}
-                      onReason={setManualSubtotalReason}
-                      className="sm:w-56"
+                    <MoneyInput
+                      className="h-9 sm:w-56"
+                      value={manualSubtotal !== undefined ? manualSubtotal : autoSubtotal}
+                      onChange={setManualSubtotal}
                     />
                   </div>
                   <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
                     <span>Discount</span>
-                    <AutoManual
-                      auto={autoDiscount}
-                      manual={manualDiscount}
-                      reason={manualDiscountReason}
-                      onManual={setManualDiscount}
-                      onReason={setManualDiscountReason}
-                      className="sm:w-56"
+                    <MoneyInput
+                      className="h-9 sm:w-56"
+                      value={manualDiscount !== undefined ? manualDiscount : autoDiscount}
+                      onChange={setManualDiscount}
                     />
                   </div>
                   <div className="grid grid-cols-1 items-center gap-2 sm:grid-cols-[1fr_auto]">
                     <span>Shipping / other</span>
-                    <AutoManual
-                      auto={autoShipping}
-                      manual={manualShipping}
-                      reason={manualShippingReason}
-                      onManual={setManualShipping}
-                      onReason={setManualShippingReason}
-                      className="sm:w-56"
+                    <MoneyInput
+                      className="h-9 sm:w-56"
+                      value={manualShipping !== undefined ? manualShipping : autoShipping}
+                      onChange={setManualShipping}
                     />
                   </div>
                   <div className="mt-1 grid grid-cols-1 items-center gap-2 border-t border-sl-total/20 pt-2 text-base font-semibold sm:grid-cols-[1fr_auto]">
                     <span>Grand total{isForeign ? ` (${form.currency})` : ""}</span>
-                    <AutoManual
-                      auto={autoGrandTotal}
-                      manual={manualGrandTotal}
-                      reason={manualGrandTotalReason}
-                      onManual={setManualGrandTotal}
-                      onReason={setManualGrandTotalReason}
-                      className="sm:w-56"
+                    <MoneyInput
+                      className="h-9 sm:w-56"
+                      value={manualGrandTotal !== undefined ? manualGrandTotal : autoGrandTotal}
+                      onChange={setManualGrandTotal}
                     />
                   </div>
                   {isForeign ? (
@@ -1721,12 +1671,9 @@ export function SaleForm({
                     <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
                       <FormField label="Amount received" required>
                         {payMode === "full" ? (
-                          <AutoManual
-                            auto={payableTotal}
-                            manual={manualReceived}
-                            reason={manualReceivedReason}
-                            onManual={setManualReceived}
-                            onReason={setManualReceivedReason}
+                          <MoneyInput
+                            value={manualReceived !== undefined ? manualReceived : payableTotal}
+                            onChange={setManualReceived}
                           />
                         ) : (
                           <MoneyInput
@@ -1774,7 +1721,6 @@ export function SaleForm({
                   <p className="num mt-2 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
                     Pending after saving:{" "}
                     {formatMoney(round2(Math.max(0, payableTotal - receivedNow)))}
-                    {manualReceived !== undefined ? <ManualBadge /> : null}
                   </p>
                 </div>
 

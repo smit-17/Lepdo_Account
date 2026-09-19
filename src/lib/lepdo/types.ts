@@ -27,6 +27,7 @@ export type CategoryId =
   | "uchhina_money_received_back"
   | "owner_investment"
   | "owner_drawing"
+  | "opening_balance"
   | "bank_transfer"
   | "bank_to_cash"
   | "cash_to_bank"

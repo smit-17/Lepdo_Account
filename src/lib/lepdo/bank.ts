@@ -63,6 +63,7 @@ export const BANK_CATEGORIES: { id: CategoryId; label: string }[] = [
   { id: "uchhina_money_given", label: "Uchhina" },
   { id: "uchhina_money_received_back", label: "Uchhina" },
   { id: "owner_investment", label: "Money Added / Capital" },
+  { id: "opening_balance", label: "Opening Balance" },
   { id: "bank_transfer", label: "Bank Transfer" },
   { id: "bank_to_cash", label: "Bank Transfer" },
   { id: "other", label: "Other" },
@@ -81,6 +82,7 @@ export type BankUiCategory =
   | "owner_drawing"
   | "uchhina"
   | "owner_investment"
+  | "opening_balance"
   | "bank_transfer"
   | "other";
 
@@ -92,6 +94,7 @@ export const BANK_ENTRY_OPTIONS: { id: BankUiCategory; label: string }[] = [
   { id: "owner_drawing", label: "UPI / Personal Withdrawal" },
   { id: "uchhina", label: "Uchhina" },
   { id: "owner_investment", label: "Money Added / Capital" },
+  { id: "opening_balance", label: "Opening Balance" },
   { id: "bank_transfer", label: "Bank Transfer" },
   { id: "other", label: "Other" },
 ];
@@ -99,7 +102,8 @@ export const BANK_ENTRY_OPTIONS: { id: BankUiCategory; label: string }[] = [
 /** Fixed direction for bank entry choices that can only go one way. Returns null when
  *  the user must choose (Uchhina, Bank Transfer, Other). */
 export function bankFixedDirection(id: BankUiCategory | ""): "in" | "out" | null {
-  if (id === "sale_payment" || id === "owner_investment") return "in";
+  if (id === "sale_payment" || id === "owner_investment" || id === "opening_balance")
+    return "in";
   if (id === "purchase_payment" || id === "expense" || id === "owner_drawing") return "out";
   return null;
 }
@@ -134,6 +138,8 @@ export function uiCategoryFromCategoryId(id: CategoryId | null): BankUiCategory 
       return "uchhina";
     case "owner_investment":
       return "owner_investment";
+    case "opening_balance":
+      return "opening_balance";
     case "bank_transfer":
     case "bank_to_cash":
       return "bank_transfer";
