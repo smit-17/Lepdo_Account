@@ -445,14 +445,6 @@ export function SaleForm({
     ...store.salesInvoices.flatMap((i) => (i.jewelryItems ?? []).map((j) => j.description)),
   ]);
   const saleTypeOptions = masterOptions(store.masters, "saleTypes");
-  /** Default rate for a currency from the "Exchange Rates" master ("USD = 84.00"). */
-  const masterRate = (code: string): string => {
-    for (const raw of masterOptions(store.masters, "exchangeRates")) {
-      const [cur, val] = raw.split("=").map((s) => s.trim());
-      if (cur && val && cur.toUpperCase() === code.toUpperCase()) return val;
-    }
-    return "";
-  };
   const sizeOptions = uniq([
     ...MM_SIZES,
     ...store.salesInvoices.flatMap((i) =>
@@ -816,18 +808,10 @@ export function SaleForm({
                       value={form.currency}
                       onChange={(v) => {
                         const code = v.toUpperCase();
-                        const suggested = masterRate(code);
                         setForm({
                           ...form,
                           currency: code,
-                          exchangeRate:
-                            code === "INR"
-                              ? 1
-                              : suggested
-                                ? toNum(suggested)
-                                : form.exchangeRate === 1
-                                  ? undefined
-                                  : form.exchangeRate,
+                          exchangeRate: code === "INR" ? 1 : undefined,
                         });
                       }}
                     />
